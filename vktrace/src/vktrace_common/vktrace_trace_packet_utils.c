@@ -4,23 +4,17 @@
  * Copyright (C) 2014-2016 LunarG, Inc.
  * All Rights Reserved.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * Author: Jon Ashburn <jon@lunarg.com>
  * Author: Peter Lohrmann <peterl@valvesoftware.com>
@@ -39,7 +33,6 @@
 #endif
 
 static uint64_t g_packet_index = 0;
-static int g_reliable_rdtsc = -1;
 
 void vktrace_gen_uuid(uint32_t* pUuid)
 {
@@ -52,56 +45,41 @@ void vktrace_gen_uuid(uint32_t* pUuid)
     pUuid[3] = buf[3];
 }
 
-BOOL vktrace_init_time()
-{
 #if defined(PLATFORM_LINUX)
-    if (g_reliable_rdtsc == -1)
-    {
-        g_reliable_rdtsc = 0;
-
-        FILE *file = fopen("/sys/devices/system/clocksource/clocksource0/current_clocksource", "r");
-        if (file)
-        {
-            char buf[64];
-
-            if (fgets(buf, sizeof(buf), file))
-            {
-                if (buf[0] == 't' && buf[1] == 's' && buf[2] == 'c')
-                    g_reliable_rdtsc = 1;
-            }
-
-            fclose(file);
-        }
-    }
-
-    // return true for reliable rdtsc.
-    return !!g_reliable_rdtsc;
-#else
-    return TRUE;
-#endif
-}
-
 uint64_t vktrace_get_time()
 {
-#if defined(VKTRACE_USE_LINUX_API)
-    extern int g_reliable_rdtsc;
-    if (g_reliable_rdtsc == -1)
-        init_rdtsc();
-    if (g_reliable_rdtsc == 0)
-    {
-        //$ TODO: Should just use SDL_GetPerformanceCounter?
-        struct timespec time;
-        clock_gettime(CLOCK_MONOTONIC, &time);
-        return ((uint64_t)time.tv_sec * 1000000000) + time.tv_nsec;
-    }
-#elif defined(COMPILER_GCCLIKE)
-    unsigned int hi, lo;
-    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
-    return ((uint64_t)hi << 32) | lo;
-#else
-    return __rdtsc();
-#endif
+    struct timespec time;
+    clock_gettime(CLOCK_MONOTONIC, &time);
+    return ((uint64_t)time.tv_sec * 1000000000) + time.tv_nsec;
 }
+#elif defined(PLATFORM_WINDOWS)
+uint64_t vktrace_get_time()
+{
+    // Should really avoid using RDTSC here since for RDTSC to be
+    // accurate, the process needs to stay on the same CPU and the CPU
+    // needs to stay at the same clock rate, which isn't always the case
+    // with today's power managed CPUs.
+    // But if all that is OK, the following one-liner could be used instead
+    // of the rest of this function.
+    //
+    // return __rdtsc();
+    //
+    LARGE_INTEGER count;
+    static LARGE_INTEGER start, freq;
+    if (0 == start.QuadPart) {
+        QueryPerformanceFrequency(&freq);
+        QueryPerformanceCounter(&start);
+    }
+    QueryPerformanceCounter(&count);
+    // Using a relative (from start) count here postpones overflow as we convert to ns.
+    return (uint64_t)(((count.QuadPart - start.QuadPart) * 1000000000) / freq.QuadPart);
+}
+#else
+uint64_t vktrace_get_time()
+{
+    return 0;
+}
+#endif
 
 //=============================================================================
 // trace file header
@@ -139,7 +117,8 @@ vktrace_trace_packet_header* vktrace_create_trace_packet(uint8_t tracer_id, uint
     pHeader->tracer_id = tracer_id;
     pHeader->thread_id = vktrace_platform_get_thread_id();
     pHeader->packet_id = packet_id;
-    pHeader->vktrace_begin_time = vktrace_get_time();
+    if (pHeader->vktrace_begin_time == 0)
+        pHeader->vktrace_begin_time = vktrace_get_time();
     pHeader->entrypoint_begin_time = pHeader->vktrace_begin_time;
     pHeader->entrypoint_end_time = 0;
     pHeader->vktrace_end_time = 0;

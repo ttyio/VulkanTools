@@ -4,23 +4,17 @@
  * Copyright (C) 2015-2016 LunarG, Inc.
  * All Rights Reserved
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * The above copyright notice and this permission notice shall be included
- * in all copies or substantial portions of the Software.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * Author: Peter Lohrmann <peterl@valvesoftware.com>
  * Author: Jon Ashburn <jon@lunarg.com>
@@ -242,8 +236,11 @@ int vkDisplay::create_window(const unsigned int width, const unsigned int height
     }
 
     // create the window
-    m_windowHandle = CreateWindow(APP_NAME, APP_NAME, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, 0, 0,
-                          width, height, NULL, NULL, wcex.hInstance, NULL);
+    RECT wr = {0,0,width,height};
+    AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, FALSE);
+    m_windowHandle = CreateWindow(APP_NAME, APP_NAME, WS_OVERLAPPEDWINDOW,
+                                  0, 0, wr.right-wr.left, wr.bottom-wr.top,
+                                  NULL, NULL, wcex.hInstance, NULL);
 
     if (m_windowHandle)
     {
@@ -271,13 +268,16 @@ void vkDisplay::resize_window(const unsigned int width, const unsigned int heigh
         values[0] = width;
         values[1] = height;
         xcb_configure_window(m_pXcbConnection, m_XcbWindow, XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, values);
+        xcb_flush(m_pXcbConnection);
         m_windowWidth = width;
         m_windowHeight = height;
     }
 #elif defined(WIN32)
     if (width != m_windowWidth || height != m_windowHeight)
     {
-        SetWindowPos(get_window_handle(), HWND_TOP, 0, 0, width, height, SWP_NOMOVE);
+        RECT wr = {0, 0, width, height};
+        AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, FALSE);
+        SetWindowPos(get_window_handle(), HWND_TOP, 0, 0, wr.right-wr.left, wr.bottom-wr.top, SWP_NOMOVE);
         m_windowWidth = width;
         m_windowHeight = height;
     }

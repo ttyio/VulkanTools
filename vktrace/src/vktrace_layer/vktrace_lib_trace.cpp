@@ -4,23 +4,17 @@
  * Copyright (C) 2015-2016 LunarG, Inc.
  * All Rights Reserved.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * The above copyright notice and this permission notice shall be included
- * in all copies or substantial portions of the Software.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * Author: Jon Ashburn <jon@lunarg.com>
  * Author: Tobin Ehlis <tobin@lunarg.com>
@@ -181,9 +175,9 @@ VKTRACER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL __HOOKED_vkMapMemory(
     vktrace_set_packet_entrypoint_end_time(pHeader);
     entry = find_mem_info_entry(memory);
 
-    // For vktrace usage, clamp the memory size to the total size if VK_WHOLE_SIZE is specified.
+    // For vktrace usage, clamp the memory size to the total size less offset if VK_WHOLE_SIZE is specified.
     if (size == VK_WHOLE_SIZE) {
-        size = entry->totalSize;
+        size = entry->totalSize - offset;
     }
     pPacket = interpret_body_as_vkMapMemory(pHeader);
     pPacket->device = device;
@@ -209,7 +203,9 @@ VKTRACER_EXPORT VKAPI_ATTR void VKAPI_CALL __HOOKED_vkUnmapMemory(
     vktrace_trace_packet_header* pHeader;
     packet_vkUnmapMemory* pPacket;
     VKAllocInfo *entry;
-    size_t siz = 0, off = 0;
+    size_t siz = 0;
+    uint64_t trace_begin_time = vktrace_get_time();
+
     // insert into packet the data that was written by CPU between the vkMapMemory call and here
     // Note must do this prior to the real vkUnMap() or else may get a FAULT
     vktrace_enter_critical_section(&g_memInfoLock);
@@ -220,19 +216,20 @@ VKTRACER_EXPORT VKAPI_ATTR void VKAPI_CALL __HOOKED_vkUnmapMemory(
         {
             // no FlushMapped Memory
             siz = (size_t)entry->rangeSize;
-            off = (size_t)entry->rangeOffset;
         }
     }
     CREATE_TRACE_PACKET(vkUnmapMemory, siz);
+    pHeader->vktrace_begin_time = trace_begin_time;
     pPacket = interpret_body_as_vkUnmapMemory(pHeader);
     if (siz)
     {
         assert(entry->handle == memory);
-        vktrace_add_buffer_to_trace_packet(pHeader, (void**) &(pPacket->pData), siz, entry->pData + off);
+        vktrace_add_buffer_to_trace_packet(pHeader, (void**) &(pPacket->pData), siz, entry->pData);
         vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pData));
         entry->pData = NULL;
     }
     vktrace_leave_critical_section(&g_memInfoLock);
+    pHeader->entrypoint_begin_time = vktrace_get_time();
     mdd(device)->devTable.UnmapMemory(device, memory);
     vktrace_set_packet_entrypoint_end_time(pHeader);
     pPacket->device = device;
@@ -272,6 +269,7 @@ VKTRACER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL __HOOKED_vkFlushMappedMemoryRange
     size_t dataSize = 0;
     uint32_t iter;
     packet_vkFlushMappedMemoryRanges* pPacket = NULL;
+    uint64_t trace_begin_time = vktrace_get_time();
 
     // find out how much memory is in the ranges
     for (iter = 0; iter < memoryRangeCount; iter++)
@@ -282,6 +280,7 @@ VKTRACER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL __HOOKED_vkFlushMappedMemoryRange
     }
 
     CREATE_TRACE_PACKET(vkFlushMappedMemoryRanges, rangesSize + sizeof(void*)*memoryRangeCount + dataSize);
+    pHeader->vktrace_begin_time = trace_begin_time;
     pPacket = interpret_body_as_vkFlushMappedMemoryRanges(pHeader);
 
     vktrace_add_buffer_to_trace_packet(pHeader, (void**) &(pPacket->pMemoryRanges), rangesSize, pMemoryRanges);
@@ -320,6 +319,7 @@ VKTRACER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL __HOOKED_vkFlushMappedMemoryRange
     // now finalize the ppData array since it is done being updated
     vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->ppData));
 
+    pHeader->entrypoint_begin_time = vktrace_get_time();
     result = mdd(device)->devTable.FlushMappedMemoryRanges(device, memoryRangeCount, pMemoryRanges);
     vktrace_set_packet_entrypoint_end_time(pHeader);
     pPacket->device = device;
@@ -1064,6 +1064,39 @@ VKTRACER_EXPORT VKAPI_ATTR void VKAPI_CALL __HOOKED_vkCmdPushConstants(
     FINISH_TRACE_PACKET();
 }
 
+VKTRACER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL __HOOKED_vkGetPipelineCacheData(
+    VkDevice device,
+    VkPipelineCache pipelineCache,
+    size_t* pDataSize,
+    void* pData)
+{
+    vktrace_trace_packet_header* pHeader;
+    VkResult result;
+    packet_vkGetPipelineCacheData* pPacket = NULL;
+    uint64_t startTime;
+    uint64_t endTime;
+    uint64_t vktraceStartTime = vktrace_get_time();
+    startTime = vktrace_get_time();
+    result = mdd(device)->devTable.GetPipelineCacheData(device, pipelineCache, pDataSize, pData);
+    endTime = vktrace_get_time();
+    assert(pDataSize);
+    CREATE_TRACE_PACKET(vkGetPipelineCacheData, sizeof(size_t)  + *pDataSize );
+    pHeader->vktrace_begin_time = vktraceStartTime;
+    pHeader->entrypoint_begin_time = startTime;
+    pHeader->entrypoint_end_time = endTime;
+    vktrace_set_packet_entrypoint_end_time(pHeader);
+    pPacket = interpret_body_as_vkGetPipelineCacheData(pHeader);
+    pPacket->device = device;
+    pPacket->pipelineCache = pipelineCache;
+    vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pDataSize), sizeof(size_t), pDataSize);
+    vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pData), *pDataSize, pData);
+    pPacket->result = result;
+    vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pDataSize));
+    vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pData));
+    FINISH_TRACE_PACKET();
+    return result;
+}
+
 VKTRACER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL __HOOKED_vkCreateGraphicsPipelines(
     VkDevice device,
     VkPipelineCache pipelineCache,
@@ -1110,7 +1143,21 @@ VKTRACER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL __HOOKED_vkCreateComputePipelines
     vktrace_trace_packet_header* pHeader;
     VkResult result;
     packet_vkCreateComputePipelines* pPacket = NULL;
-    CREATE_TRACE_PACKET(vkCreateComputePipelines, createInfoCount*sizeof(VkComputePipelineCreateInfo) + sizeof(VkAllocationCallbacks) + sizeof(VkPipeline));
+    uint32_t i;
+    size_t total_size;
+
+    total_size = createInfoCount*sizeof(VkComputePipelineCreateInfo) + sizeof(VkAllocationCallbacks) + createInfoCount*sizeof(VkPipeline);
+    for (i=0; i < createInfoCount; i++) {
+        total_size += (strlen(pCreateInfos[i].stage.pName)+1);
+        if (pCreateInfos[i].stage.pSpecializationInfo) {
+            total_size += sizeof(VkSpecializationInfo);
+            if (pCreateInfos[i].stage.pSpecializationInfo->mapEntryCount > 0 && pCreateInfos[i].stage.pSpecializationInfo->pMapEntries)
+                total_size += pCreateInfos[i].stage.pSpecializationInfo->mapEntryCount * sizeof(VkSpecializationMapEntry);
+            if (pCreateInfos[i].stage.pSpecializationInfo->dataSize > 0 && pCreateInfos[i].stage.pSpecializationInfo->pData)
+                total_size += pCreateInfos[i].stage.pSpecializationInfo->dataSize;
+        }
+    }
+    CREATE_TRACE_PACKET(vkCreateComputePipelines, total_size);
     result = mdd(device)->devTable.CreateComputePipelines(device, pipelineCache, createInfoCount, pCreateInfos, pAllocator, pPipelines);
     vktrace_set_packet_entrypoint_end_time(pHeader);
     pPacket = interpret_body_as_vkCreateComputePipelines(pHeader);
@@ -1483,12 +1530,22 @@ VKTRACER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL __HOOKED_vkCreateXlibSurfaceKHR(
     const VkAllocationCallbacks*                pAllocator,
     VkSurfaceKHR*                               pSurface)
 {
+    vktrace_trace_packet_header* pHeader;
     VkResult result;
-
-    // TODO: Implement.
-
+    packet_vkCreateXlibSurfaceKHR* pPacket = NULL;
+    // don't bother with copying the actual xlib window and connection into the trace packet, vkreplay has to use it's own anyway
+    CREATE_TRACE_PACKET(vkCreateXlibSurfaceKHR, sizeof(VkSurfaceKHR) + sizeof(VkAllocationCallbacks) + sizeof(VkXlibSurfaceCreateInfoKHR));
     result = mid(instance)->instTable.CreateXlibSurfaceKHR(instance, pCreateInfo, pAllocator, pSurface);
-
+    pPacket = interpret_body_as_vkCreateXlibSurfaceKHR(pHeader);
+    pPacket->instance = instance;
+    vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pCreateInfo), sizeof(VkXlibSurfaceCreateInfoKHR), pCreateInfo);
+    vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pAllocator), sizeof(VkAllocationCallbacks), NULL);
+    vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pSurface), sizeof(VkSurfaceKHR), pSurface);
+    pPacket->result = result;
+    vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pCreateInfo));
+    vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pAllocator));
+    vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pSurface));
+    FINISH_TRACE_PACKET();
     return result;
 }
 
@@ -1498,12 +1555,19 @@ VKTRACER_EXPORT VKAPI_ATTR VkBool32 VKAPI_CALL __HOOKED_vkGetPhysicalDeviceXlibP
     Display*                                    dpy,
     VisualID                                    visualID)
 {
+    vktrace_trace_packet_header* pHeader;
     VkBool32 result;
-
-    // TODO: Implement.
-
+    packet_vkGetPhysicalDeviceXlibPresentationSupportKHR* pPacket = NULL;
+    // don't bother with copying the actual xlib visual_id and connection into the trace packet, vkreplay has to use it's own anyway
+    CREATE_TRACE_PACKET(vkGetPhysicalDeviceXlibPresentationSupportKHR, 0);
     result = mid(physicalDevice)->instTable.GetPhysicalDeviceXlibPresentationSupportKHR(physicalDevice, queueFamilyIndex, dpy, visualID);
-
+    pPacket = interpret_body_as_vkGetPhysicalDeviceXlibPresentationSupportKHR(pHeader);
+    pPacket->physicalDevice = physicalDevice;
+    pPacket->dpy = dpy;
+    pPacket->queueFamilyIndex = queueFamilyIndex;
+    pPacket->visualID = visualID;
+    pPacket->result = result;
+    FINISH_TRACE_PACKET();
     return result;
 }
 #endif
@@ -1858,10 +1922,6 @@ VKTRACER_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL __HOOKED_vkGetDevicePro
         }
     }
 
-    if (device == VK_NULL_HANDLE) {
-        return NULL;
-    }
-
     layer_device_data  *devData = mdd(device);
     if (gMessageStream != NULL) {
 
@@ -1884,6 +1944,11 @@ VKTRACER_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL __HOOKED_vkGetDevicePro
                 return (PFN_vkVoidFunction) __HOOKED_vkQueuePresentKHR;
         }
     }
+
+    if (device == VK_NULL_HANDLE) {
+        return NULL;
+    }
+
     VkLayerDispatchTable *pDisp =  &devData->devTable;
     if (pDisp->GetDeviceProcAddr == NULL)
         return NULL;
@@ -1918,10 +1983,6 @@ VKTRACER_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL __HOOKED_vkGetInstanceP
     PFN_vkVoidFunction addr;
     layer_instance_data  *instData;
 
-    if (instance == VK_NULL_HANDLE) {
-        return NULL;
-    }
-
     vktrace_platform_thread_once(&gInitOnce, InitTracer);
     if (!strcmp("vkGetInstanceProcAddr", funcName)) {
         if (gMessageStream != NULL) {
@@ -1935,6 +1996,10 @@ VKTRACER_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL __HOOKED_vkGetInstanceP
         addr = layer_intercept_instance_proc(funcName);
         if (addr)
             return addr;
+
+        if (instance == VK_NULL_HANDLE) {
+            return NULL;
+        }
 
         instData = mid(instance);
         if (instData->LunargDebugReportEnabled)
@@ -2004,6 +2069,9 @@ VKTRACER_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL __HOOKED_vkGetInstanceP
         }
 #endif
     } else {
+        if (instance == VK_NULL_HANDLE) {
+            return NULL;
+        }
         instData = mid(instance);
     }
     VkLayerInstanceDispatchTable* pTable = &instData->instTable;

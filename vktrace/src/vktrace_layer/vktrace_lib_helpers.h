@@ -4,23 +4,17 @@
  * Copyright (C) 2015-2016 LunarG, Inc.
  * All Rights Reserved.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * The above copyright notice and this permission notice shall be included
- * in all copies or substantial portions of the Software.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * Author: Jon Ashburn <jon@lunarg.com>
  * Author: Tobin Ehlis <tobin@lunarg.com>
@@ -219,13 +213,13 @@ static void add_data_to_mem_info(const VkDeviceMemory handle, VkDeviceSize range
     entry = find_mem_info_entry(handle);
     if (entry)
     {
-        entry->pData = (uint8_t *) pData;
-        if (rangeSize == 0)
+        entry->pData = (uint8_t *)pData;
+        if (rangeSize == VK_WHOLE_SIZE)
             entry->rangeSize = entry->totalSize - rangeOffset;
         else
             entry->rangeSize = rangeSize;
         entry->rangeOffset = rangeOffset;
-        assert(entry->totalSize >= rangeSize + rangeOffset);
+        assert(entry->totalSize >= entry->rangeSize + rangeOffset);
     }
     g_memInfo.pLastMapped = entry;
     vktrace_leave_critical_section(&g_memInfoLock);
@@ -398,51 +392,8 @@ static void add_VkComputePipelineCreateInfos_to_trace_packet(vktrace_trace_packe
         uint32_t i;
 
         for (i = 0; i < count; i++) {
-
             // shader stage
-            vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->stage), sizeof(VkPipelineShaderStageCreateInfo), &pParam[i].stage);
             add_VkPipelineShaderStageCreateInfo_to_trace_packet(pHeader, (VkPipelineShaderStageCreateInfo*)&pPacket->stage, &pParam[i].stage);
-            vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->stage));
-
-/*
-            // Vertex Input State
-            vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pVertexInputState), sizeof(VkPipelineVertexInputStateCreateInfo), pParam[i]->pVertexInputState);
-            vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pVertexInputState->pVertexBindingDescriptions), pParam[i]->pVertexInputState->bindingCount * sizeof(VkVertexInputBindingDescription), pParam[i]->pVertexInputState->pVertexBindingDescriptions);
-            vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pVertexInputState->pVertexBindingDescriptions));
-            vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pVertexInputState->pVertexAttributeDescriptions), pParam[i]->pVertexInputState->attributeCount * sizeof(VkVertexInputAttributeDescription), pParam[i]->pVertexInputState->pVertexAttributeDescriptions);
-            vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pVertexInputState->pVertexAttributeDescriptions));
-            vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pVertexInputState));
-
-            // Input Assembly State
-            vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pInputAssemblyState), sizeof(VkPipelineInputAssemblyStateCreateInfo), pParam[i]->pInputAssemblyState);
-            vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pInputAssemblyState));
-
-            // Tesselation State
-            vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pTessellationState), sizeof(VkPipelineTessellationStateCreateInfo), pParam[i]->pTessellationState);
-            vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pTessellationState));
-
-            // Viewport State
-            vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pViewportState), sizeof(VkPipelineViewportStateCreateInfo), pParam[i]->pViewportState);
-            vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pViewportState));
-
-            // Raster State
-            vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pRasterizationState), sizeof(VkPipelineRasterizationStateCreateInfo), pParam[i]->pRasterizationState);
-            vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pRasterizationState));
-
-            // MultiSample State
-            vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pMultisampleState), sizeof(VkPipelineMultisampleStateCreateInfo), pParam[i]->pMultisampleState);
-            vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pMultisampleState));
-
-            // DepthStencil State
-            vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pDepthStencilState), sizeof(VkPipelineDepthStencilStateCreateInfo), pParam[i]->pDepthStencilState);
-            vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pDepthStencilState));
-
-            // ColorBlend State
-            vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pColorBlendState), sizeof(VkPipelineColorBlendStateCreateInfo), pParam[i]->pColorBlendState);
-            vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pColorBlendState->pAttachments), pParam[i]->pColorBlendState->attachmentCount * sizeof(VkPipelineColorBlendAttachmentState), pParam[i]->pColorBlendState->pAttachments);
-            vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pColorBlendState->pAttachments));
-            vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pColorBlendState));
-*/
         }
     }
     return;

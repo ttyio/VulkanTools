@@ -6,6 +6,9 @@ cd $(dirname "$0")
 # Halt on error
 set -e
 
+#Verify that the loader is working
+./run_loader_tests.sh
+
 # Verify that validation checks in source match documentation
 ./vkvalidatelayerdoc.sh
 
@@ -30,4 +33,5 @@ set -e
 
 # vktracereplay.sh tests vktrace trace and replay
 ./vktracereplay.sh
+
 

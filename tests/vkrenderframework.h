@@ -3,24 +3,17 @@
  * Copyright (c) 2015-2016 Valve Corporation
  * Copyright (c) 2015-2016 LunarG, Inc.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and/or associated documentation files (the "Materials"), to
- * deal in the Materials without restriction, including without limitation the
- * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
- * sell copies of the Materials, and to permit persons to whom the Materials are
- * furnished to do so, subject to the following conditions:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * The above copyright notice(s) and this permission notice shall be included in
- * all copies or substantial portions of the Materials.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
- *
- * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE MATERIALS OR THE
- * USE OR OTHER DEALINGS IN THE MATERIALS.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * Author: Courtney Goeltzenleuchter <courtney@LunarG.com>
  */
@@ -35,7 +28,9 @@ class VkImageObj;
 #include "vktestframework.h"
 #endif
 
+#include <map>
 #include <vector>
+#include <array>
 
 using namespace std;
 
@@ -51,7 +46,7 @@ class VkDeviceObj : public vk_testing::Device {
 
     uint32_t id;
     VkPhysicalDeviceProperties props;
-    const VkQueueFamilyProperties *queue_props;
+    std::vector<VkQueueFamilyProperties> queue_props;
 
     VkQueue m_queue;
 };
@@ -64,6 +59,7 @@ class VkRenderFramework : public VkTestFramework {
     VkRenderFramework();
     ~VkRenderFramework();
 
+    VkInstance instance() { return inst; }
     VkDevice device() { return m_device->device(); }
     VkPhysicalDevice gpu() { return objs[0]; }
     VkRenderPass renderPass() { return m_renderPass; }
@@ -189,8 +185,8 @@ class VkCommandBufferObj : public vk_testing::CommandBuffer {
     void DrawIndexed(uint32_t indexCount, uint32_t instanceCount,
                      uint32_t firstIndex, int32_t vertexOffset,
                      uint32_t firstInstance);
-    void QueueCommandBuffer();
-    void QueueCommandBuffer(VkFence fence);
+    void QueueCommandBuffer(bool checkSuccess = true);
+    void QueueCommandBuffer(VkFence fence, bool checkSuccess = true);
     void SetViewport(uint32_t firstViewport, uint32_t viewportCount,
                      const VkViewport *pViewports);
     void SetScissor(uint32_t firstScissor, uint32_t scissorCount,
@@ -204,7 +200,7 @@ class VkCommandBufferObj : public vk_testing::CommandBuffer {
     void SetStencilWriteMask(VkStencilFaceFlags faceMask, uint32_t writeMask);
     void SetStencilReference(VkStencilFaceFlags faceMask, uint32_t reference);
     void UpdateBuffer(VkBuffer buffer, VkDeviceSize dstOffset,
-                      VkDeviceSize dataSize, const uint32_t *pData);
+                      VkDeviceSize dataSize, const void *pData);
     void CopyImage(VkImage srcImage, VkImageLayout srcImageLayout,
                    VkImage dstImage, VkImageLayout dstImageLayout,
                    uint32_t regionCount, const VkImageCopy *pRegions);
@@ -219,9 +215,15 @@ class VkCommandBufferObj : public vk_testing::CommandBuffer {
 
 class VkConstantBufferObj : public vk_testing::Buffer {
   public:
-    VkConstantBufferObj(VkDeviceObj *device);
+    VkConstantBufferObj(VkDeviceObj *device,
+                        VkBufferUsageFlags usage =
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     VkConstantBufferObj(VkDeviceObj *device, int constantCount,
-                        int constantSize, const void *data);
+                        int constantSize, const void *data,
+                        VkBufferUsageFlags usage =
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     ~VkConstantBufferObj();
     void BufferMemoryBarrier(
         VkFlags srcAccessMask = VK_ACCESS_HOST_WRITE_BIT |
@@ -315,9 +317,9 @@ class VkImageObj : public vk_testing::Image {
         return m_targetView.handle();
     }
 
-    void SetLayout(VkCommandBufferObj *cmd_buf, VkImageAspectFlagBits aspect,
+    void SetLayout(VkCommandBufferObj *cmd_buf, VkImageAspectFlags aspect,
                    VkImageLayout image_layout);
-    void SetLayout(VkImageAspectFlagBits aspect, VkImageLayout image_layout);
+    void SetLayout(VkImageAspectFlags aspect, VkImageLayout image_layout);
 
     VkImageLayout layout() const { return m_descriptorImageInfo.imageLayout; }
     uint32_t width() const { return extent().width; }
@@ -347,7 +349,7 @@ class VkDepthStencilObj : public VkImageObj {
   public:
     VkDepthStencilObj(VkDeviceObj *device);
     void Init(VkDeviceObj *device, int32_t width, int32_t height,
-                       VkFormat format);
+                       VkFormat format, VkImageUsageFlags usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
     bool Initialized();
     VkImageView *BindInfo();
 
@@ -384,7 +386,8 @@ class VkDescriptorSetObj : public vk_testing::DescriptorPool {
 
   protected:
     VkDeviceObj *m_device;
-    vector<VkDescriptorPoolSize> m_type_counts;
+    std::vector<VkDescriptorSetLayoutBinding> m_layout_bindings;
+    std::map<VkDescriptorType, int> m_type_counts;
     int m_nextSlot;
 
     vector<VkDescriptorImageInfo> m_imageSamplerDescriptors;
@@ -414,9 +417,9 @@ class VkPipelineObj : public vk_testing::Pipeline {
     VkPipelineObj(VkDeviceObj *device);
     void AddShader(VkShaderObj *shaderObj);
     void AddVertexInputAttribs(VkVertexInputAttributeDescription *vi_attrib,
-                               int count);
+                               uint32_t count);
     void AddVertexInputBindings(VkVertexInputBindingDescription *vi_binding,
-                                int count);
+                                uint32_t count);
     void AddColorAttachment(uint32_t binding,
                             const VkPipelineColorBlendAttachmentState *att);
     void MakeDynamic(VkDynamicState state);
@@ -456,5 +459,4 @@ class VkPipelineObj : public vk_testing::Pipeline {
     vector<VkPipelineColorBlendAttachmentState> m_colorAttachments;
     int m_vertexBufferCount;
 };
-
 #endif // VKRENDERFRAMEWORK_H

@@ -3,24 +3,17 @@
  * Copyright (c) 2015-2016 LunarG, Inc.
  * Copyright (C) 2015-2016 Google Inc.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and/or associated documentation files (the "Materials"), to
- * deal in the Materials without restriction, including without limitation the
- * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
- * sell copies of the Materials, and to permit persons to whom the Materials
- * are furnished to do so, subject to the following conditions:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * The above copyright notice(s) and this permission notice shall be included
- * in all copies or substantial portions of the Materials.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
- *
- * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE MATERIALS OR THE
- * USE OR OTHER DEALINGS IN THE MATERIALS
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * Author: Tobin Ehlis <tobine@google.com>
  */
@@ -28,13 +21,15 @@
 #include "vk_loader_platform.h"
 #include "vulkan/vulkan.h"
 
+#include <cinttypes>
+#include <memory>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <inttypes.h>
 
-#include <vector>
 #include <unordered_map>
+#include <vector>
+#include <mutex>
 
 #include "vulkan/vk_layer.h"
 #include "vk_layer_config.h"
@@ -45,13 +40,22 @@
 #include "vk_safe_struct.h"
 #include "vk_layer_utils.h"
 
-struct layer_data {
-    bool wsi_enabled;
+namespace unique_objects {
 
-    layer_data() : wsi_enabled(false){};
+// All increments must be guarded by global_lock
+static uint64_t global_unique_id = 1;
+
+struct layer_data {
+    VkInstance instance;
+
+    bool wsi_enabled;
+    std::unordered_map<uint64_t, uint64_t> unique_id_mapping; // Map uniqueID to actual object handle
+    VkPhysicalDevice gpu;
+
+    layer_data() : wsi_enabled(false), gpu(VK_NULL_HANDLE){};
 };
 
-struct instExts {
+struct instance_extension_enables {
     bool wsi_enabled;
     bool xlib_enabled;
     bool xcb_enabled;
@@ -59,17 +63,35 @@ struct instExts {
     bool mir_enabled;
     bool android_enabled;
     bool win32_enabled;
+    bool display_enabled;
 };
 
-static std::unordered_map<void *, struct instExts> instanceExtMap;
+static std::unordered_map<void *, struct instance_extension_enables> instanceExtMap;
 static std::unordered_map<void *, layer_data *> layer_data_map;
 static device_table_map unique_objects_device_table_map;
 static instance_table_map unique_objects_instance_table_map;
-// Structure to wrap returned non-dispatchable objects to guarantee they have unique handles
-//  address of struct will be used as the unique handle
-struct VkUniqueObject {
-    uint64_t actualObject;
+static std::mutex global_lock; // Protect map accesses and unique_id increments
+
+struct GenericHeader {
+    VkStructureType sType;
+    void *pNext;
 };
+
+template <typename T> bool ContainsExtStruct(const T *target, VkStructureType ext_type) {
+    assert(target != nullptr);
+
+    const GenericHeader *ext_struct = reinterpret_cast<const GenericHeader *>(target->pNext);
+
+    while (ext_struct != nullptr) {
+        if (ext_struct->sType == ext_type) {
+            return true;
+        }
+
+        ext_struct = reinterpret_cast<const GenericHeader *>(ext_struct->pNext);
+    }
+
+    return false;
+}
 
 // Handle CreateInstance
 static void createInstanceRegisterExtensions(const VkInstanceCreateInfo *pCreateInfo, VkInstance instance) {
@@ -77,6 +99,7 @@ static void createInstanceRegisterExtensions(const VkInstanceCreateInfo *pCreate
     VkLayerInstanceDispatchTable *pDisp = get_dispatch_table(unique_objects_instance_table_map, instance);
     PFN_vkGetInstanceProcAddr gpa = pDisp->GetInstanceProcAddr;
 
+    //KHR_surface
     pDisp->DestroySurfaceKHR = (PFN_vkDestroySurfaceKHR)gpa(instance, "vkDestroySurfaceKHR");
     pDisp->GetPhysicalDeviceSurfaceSupportKHR =
         (PFN_vkGetPhysicalDeviceSurfaceSupportKHR)gpa(instance, "vkGetPhysicalDeviceSurfaceSupportKHR");
@@ -86,6 +109,18 @@ static void createInstanceRegisterExtensions(const VkInstanceCreateInfo *pCreate
         (PFN_vkGetPhysicalDeviceSurfaceFormatsKHR)gpa(instance, "vkGetPhysicalDeviceSurfaceFormatsKHR");
     pDisp->GetPhysicalDeviceSurfacePresentModesKHR =
         (PFN_vkGetPhysicalDeviceSurfacePresentModesKHR)gpa(instance, "vkGetPhysicalDeviceSurfacePresentModesKHR");
+
+    // KHR_display
+#ifndef __ANDROID__
+    pDisp->GetPhysicalDeviceDisplayPropertiesKHR = (PFN_vkGetPhysicalDeviceDisplayPropertiesKHR)gpa(instance, "vkGetPhysicalDeviceDisplayPropertiesKHR");
+    pDisp->GetPhysicalDeviceDisplayPlanePropertiesKHR = (PFN_vkGetPhysicalDeviceDisplayPlanePropertiesKHR)gpa(instance, "vkGetPhysicalDeviceDisplayPlanePropertiesKHR");
+    pDisp->GetDisplayPlaneSupportedDisplaysKHR = (PFN_vkGetDisplayPlaneSupportedDisplaysKHR)gpa(instance, "vkGetDisplayPlaneSupportedDisplaysKHR");
+    pDisp->GetDisplayModePropertiesKHR = (PFN_vkGetDisplayModePropertiesKHR)gpa(instance, "vkGetDisplayModePropertiesKHR");
+    pDisp->CreateDisplayModeKHR = (PFN_vkCreateDisplayModeKHR)gpa(instance, "vkCreateDisplayModeKHR");
+    pDisp->GetDisplayPlaneCapabilitiesKHR = (PFN_vkGetDisplayPlaneCapabilitiesKHR)gpa(instance, "vkGetDisplayPlaneCapabilitiesKHR");
+    pDisp->CreateDisplayPlaneSurfaceKHR = (PFN_vkCreateDisplayPlaneSurfaceKHR)gpa(instance, "vkCreateDisplayPlaneSurfaceKHR");
+#endif
+
 #ifdef VK_USE_PLATFORM_WIN32_KHR
     pDisp->CreateWin32SurfaceKHR = (PFN_vkCreateWin32SurfaceKHR)gpa(instance, "vkCreateWin32SurfaceKHR");
     pDisp->GetPhysicalDeviceWin32PresentationSupportKHR =
@@ -116,9 +151,12 @@ static void createInstanceRegisterExtensions(const VkInstanceCreateInfo *pCreate
 #endif // VK_USE_PLATFORM_ANDROID_KHR
 
     instanceExtMap[pDisp] = {};
+
     for (i = 0; i < pCreateInfo->enabledExtensionCount; i++) {
         if (strcmp(pCreateInfo->ppEnabledExtensionNames[i], VK_KHR_SURFACE_EXTENSION_NAME) == 0)
             instanceExtMap[pDisp].wsi_enabled = true;
+        if (strcmp(pCreateInfo->ppEnabledExtensionNames[i], VK_KHR_DISPLAY_EXTENSION_NAME) == 0)
+            instanceExtMap[pDisp].display_enabled = true;
 #ifdef VK_USE_PLATFORM_XLIB_KHR
         if (strcmp(pCreateInfo->ppEnabledExtensionNames[i], VK_KHR_XLIB_SURFACE_EXTENSION_NAME) == 0)
             instanceExtMap[pDisp].xlib_enabled = true;
@@ -165,11 +203,21 @@ VkResult explicit_CreateInstance(const VkInstanceCreateInfo *pCreateInfo, const 
         return result;
     }
 
+    layer_data *my_data = get_my_data_ptr(get_dispatch_key(*pInstance), layer_data_map);
+    my_data->instance = *pInstance;
     initInstanceTable(*pInstance, fpGetInstanceProcAddr, unique_objects_instance_table_map);
 
     createInstanceRegisterExtensions(pCreateInfo, *pInstance);
 
     return result;
+}
+
+void explicit_DestroyInstance(VkInstance instance, const VkAllocationCallbacks *pAllocator) {
+    dispatch_key key = get_dispatch_key(instance);
+    VkLayerInstanceDispatchTable *pDisp = get_dispatch_table(unique_objects_instance_table_map, instance);
+    instanceExtMap.erase(pDisp);
+    pDisp->DestroyInstance(instance, pAllocator);
+    layer_data_map.erase(key);
 }
 
 // Handle CreateDevice
@@ -191,12 +239,13 @@ static void createDeviceRegisterExtensions(const VkDeviceCreateInfo *pCreateInfo
 
 VkResult explicit_CreateDevice(VkPhysicalDevice gpu, const VkDeviceCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator,
                                VkDevice *pDevice) {
+    layer_data *my_instance_data = get_my_data_ptr(get_dispatch_key(gpu), layer_data_map);
     VkLayerDeviceCreateInfo *chain_info = get_chain_info(pCreateInfo, VK_LAYER_LINK_INFO);
 
     assert(chain_info->u.pLayerInfo);
     PFN_vkGetInstanceProcAddr fpGetInstanceProcAddr = chain_info->u.pLayerInfo->pfnNextGetInstanceProcAddr;
     PFN_vkGetDeviceProcAddr fpGetDeviceProcAddr = chain_info->u.pLayerInfo->pfnNextGetDeviceProcAddr;
-    PFN_vkCreateDevice fpCreateDevice = (PFN_vkCreateDevice)fpGetInstanceProcAddr(NULL, "vkCreateDevice");
+    PFN_vkCreateDevice fpCreateDevice = (PFN_vkCreateDevice)fpGetInstanceProcAddr(my_instance_data->instance, "vkCreateDevice");
     if (fpCreateDevice == NULL) {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
@@ -213,232 +262,78 @@ VkResult explicit_CreateDevice(VkPhysicalDevice gpu, const VkDeviceCreateInfo *p
     initDeviceTable(*pDevice, fpGetDeviceProcAddr, unique_objects_device_table_map);
 
     createDeviceRegisterExtensions(pCreateInfo, *pDevice);
+    // Set gpu for this device in order to get at any objects mapped at instance level
+    layer_data *my_device_data = get_my_data_ptr(get_dispatch_key(*pDevice), layer_data_map);
+    my_device_data->gpu = gpu;
 
     return result;
 }
 
-VkResult explicit_QueueSubmit(VkQueue queue, uint32_t submitCount, const VkSubmitInfo *pSubmits, VkFence fence) {
-    // UNWRAP USES:
-    //  0 : fence,VkFence
-    if (VK_NULL_HANDLE != fence) {
-        fence = (VkFence)((VkUniqueObject *)fence)->actualObject;
-    }
-    //  waitSemaphoreCount : pSubmits[submitCount]->pWaitSemaphores,VkSemaphore
-    std::vector<VkSemaphore> original_pWaitSemaphores = {};
-    //  signalSemaphoreCount : pSubmits[submitCount]->pSignalSemaphores,VkSemaphore
-    std::vector<VkSemaphore> original_pSignalSemaphores = {};
-    if (pSubmits) {
-        for (uint32_t index0 = 0; index0 < submitCount; ++index0) {
-            if (pSubmits[index0].pWaitSemaphores) {
-                for (uint32_t index1 = 0; index1 < pSubmits[index0].waitSemaphoreCount; ++index1) {
-                    VkSemaphore **ppSemaphore = (VkSemaphore **)&(pSubmits[index0].pWaitSemaphores);
-                    original_pWaitSemaphores.push_back(pSubmits[index0].pWaitSemaphores[index1]);
-                    *(ppSemaphore[index1]) =
-                        (VkSemaphore)((VkUniqueObject *)pSubmits[index0].pWaitSemaphores[index1])->actualObject;
-                }
-            }
-            if (pSubmits[index0].pSignalSemaphores) {
-                for (uint32_t index1 = 0; index1 < pSubmits[index0].signalSemaphoreCount; ++index1) {
-                    VkSemaphore **ppSemaphore = (VkSemaphore **)&(pSubmits[index0].pSignalSemaphores);
-                    original_pSignalSemaphores.push_back(pSubmits[index0].pSignalSemaphores[index1]);
-                    *(ppSemaphore[index1]) =
-                        (VkSemaphore)((VkUniqueObject *)pSubmits[index0].pSignalSemaphores[index1])->actualObject;
-                }
-            }
-        }
-    }
-    VkResult result = get_dispatch_table(unique_objects_device_table_map, queue)->QueueSubmit(queue, submitCount, pSubmits, fence);
-    if (pSubmits) {
-        for (uint32_t index0 = 0; index0 < submitCount; ++index0) {
-            if (pSubmits[index0].pWaitSemaphores) {
-                for (uint32_t index1 = 0; index1 < pSubmits[index0].waitSemaphoreCount; ++index1) {
-                    VkSemaphore **ppSemaphore = (VkSemaphore **)&(pSubmits[index0].pWaitSemaphores);
-                    *(ppSemaphore[index1]) = original_pWaitSemaphores[index1];
-                }
-            }
-            if (pSubmits[index0].pSignalSemaphores) {
-                for (uint32_t index1 = 0; index1 < pSubmits[index0].signalSemaphoreCount; ++index1) {
-                    VkSemaphore **ppSemaphore = (VkSemaphore **)&(pSubmits[index0].pSignalSemaphores);
-                    *(ppSemaphore[index1]) = original_pSignalSemaphores[index1];
-                }
-            }
-        }
-    }
-    return result;
+void explicit_DestroyDevice(VkDevice device, const VkAllocationCallbacks *pAllocator) {
+    dispatch_key key = get_dispatch_key(device);
+    get_dispatch_table(unique_objects_device_table_map, device)->DestroyDevice(device, pAllocator);
+    layer_data_map.erase(key);
 }
 
-VkResult explicit_QueueBindSparse(VkQueue queue, uint32_t bindInfoCount, const VkBindSparseInfo *pBindInfo, VkFence fence) {
-    // UNWRAP USES:
-    //  0 : pBindInfo[bindInfoCount]->pBufferBinds[bufferBindCount]->buffer,VkBuffer,
-    //  pBindInfo[bindInfoCount]->pBufferBinds[bufferBindCount]->pBinds[bindCount]->memory,VkDeviceMemory,
-    //  pBindInfo[bindInfoCount]->pImageOpaqueBinds[imageOpaqueBindCount]->image,VkImage,
-    //  pBindInfo[bindInfoCount]->pImageOpaqueBinds[imageOpaqueBindCount]->pBinds[bindCount]->memory,VkDeviceMemory,
-    //  pBindInfo[bindInfoCount]->pImageBinds[imageBindCount]->image,VkImage,
-    //  pBindInfo[bindInfoCount]->pImageBinds[imageBindCount]->pBinds[bindCount]->memory,VkDeviceMemory
-    std::vector<VkBuffer> original_buffer = {};
-    std::vector<VkDeviceMemory> original_memory1 = {};
-    std::vector<VkImage> original_image1 = {};
-    std::vector<VkDeviceMemory> original_memory2 = {};
-    std::vector<VkImage> original_image2 = {};
-    std::vector<VkDeviceMemory> original_memory3 = {};
-    std::vector<VkSemaphore> original_pWaitSemaphores = {};
-    std::vector<VkSemaphore> original_pSignalSemaphores = {};
-    if (pBindInfo) {
-        for (uint32_t index0 = 0; index0 < bindInfoCount; ++index0) {
-            if (pBindInfo[index0].pBufferBinds) {
-                for (uint32_t index1 = 0; index1 < pBindInfo[index0].bufferBindCount; ++index1) {
-                    if (pBindInfo[index0].pBufferBinds[index1].buffer) {
-                        VkBuffer *pBuffer = (VkBuffer *)&(pBindInfo[index0].pBufferBinds[index1].buffer);
-                        original_buffer.push_back(pBindInfo[index0].pBufferBinds[index1].buffer);
-                        *(pBuffer) = (VkBuffer)((VkUniqueObject *)pBindInfo[index0].pBufferBinds[index1].buffer)->actualObject;
-                    }
-                    if (pBindInfo[index0].pBufferBinds[index1].pBinds) {
-                        for (uint32_t index2 = 0; index2 < pBindInfo[index0].pBufferBinds[index1].bindCount; ++index2) {
-                            if (pBindInfo[index0].pBufferBinds[index1].pBinds[index2].memory) {
-                                VkDeviceMemory *pDeviceMemory =
-                                    (VkDeviceMemory *)&(pBindInfo[index0].pBufferBinds[index1].pBinds[index2].memory);
-                                original_memory1.push_back(pBindInfo[index0].pBufferBinds[index1].pBinds[index2].memory);
-                                *(pDeviceMemory) =
-                                    (VkDeviceMemory)((VkUniqueObject *)pBindInfo[index0].pBufferBinds[index1].pBinds[index2].memory)
-                                        ->actualObject;
-                            }
-                        }
-                    }
+VkResult explicit_AllocateMemory(VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
+                                 const VkAllocationCallbacks *pAllocator, VkDeviceMemory *pMemory) {
+    const VkMemoryAllocateInfo *input_allocate_info = pAllocateInfo;
+    std::unique_ptr<safe_VkMemoryAllocateInfo> safe_allocate_info;
+    std::unique_ptr<safe_VkDedicatedAllocationMemoryAllocateInfoNV> safe_dedicated_allocate_info;
+    layer_data *my_map_data = get_my_data_ptr(get_dispatch_key(device), layer_data_map);
+
+    if ((pAllocateInfo != nullptr) &&
+        ContainsExtStruct(pAllocateInfo, VK_STRUCTURE_TYPE_DEDICATED_ALLOCATION_MEMORY_ALLOCATE_INFO_NV)) {
+        // Assuming there is only one extension struct of this type in the list for now
+        safe_dedicated_allocate_info =
+            std::unique_ptr<safe_VkDedicatedAllocationMemoryAllocateInfoNV>(new safe_VkDedicatedAllocationMemoryAllocateInfoNV);
+        safe_allocate_info = std::unique_ptr<safe_VkMemoryAllocateInfo>(new safe_VkMemoryAllocateInfo);
+
+        safe_allocate_info->initialize(pAllocateInfo);
+        input_allocate_info = reinterpret_cast<const VkMemoryAllocateInfo *>(safe_allocate_info.get());
+
+        const GenericHeader *orig_pnext = reinterpret_cast<const GenericHeader *>(pAllocateInfo->pNext);
+        GenericHeader *input_pnext = reinterpret_cast<GenericHeader *>(safe_allocate_info.get());
+        while (orig_pnext != nullptr) {
+            if (orig_pnext->sType == VK_STRUCTURE_TYPE_DEDICATED_ALLOCATION_MEMORY_ALLOCATE_INFO_NV) {
+                safe_dedicated_allocate_info->initialize(
+                    reinterpret_cast<const VkDedicatedAllocationMemoryAllocateInfoNV *>(orig_pnext));
+
+                std::unique_lock<std::mutex> lock(global_lock);
+
+                if (safe_dedicated_allocate_info->buffer != VK_NULL_HANDLE) {
+                    uint64_t local_buffer = reinterpret_cast<uint64_t &>(safe_dedicated_allocate_info->buffer);
+                    safe_dedicated_allocate_info->buffer =
+                        reinterpret_cast<VkBuffer &>(my_map_data->unique_id_mapping[local_buffer]);
                 }
-            }
-            if (pBindInfo[index0].pImageOpaqueBinds) {
-                for (uint32_t index1 = 0; index1 < pBindInfo[index0].imageOpaqueBindCount; ++index1) {
-                    if (pBindInfo[index0].pImageOpaqueBinds[index1].image) {
-                        VkImage *pImage = (VkImage *)&(pBindInfo[index0].pImageOpaqueBinds[index1].image);
-                        original_image1.push_back(pBindInfo[index0].pImageOpaqueBinds[index1].image);
-                        *(pImage) = (VkImage)((VkUniqueObject *)pBindInfo[index0].pImageOpaqueBinds[index1].image)->actualObject;
-                    }
-                    if (pBindInfo[index0].pImageOpaqueBinds[index1].pBinds) {
-                        for (uint32_t index2 = 0; index2 < pBindInfo[index0].pImageOpaqueBinds[index1].bindCount; ++index2) {
-                            if (pBindInfo[index0].pImageOpaqueBinds[index1].pBinds[index2].memory) {
-                                VkDeviceMemory *pDeviceMemory =
-                                    (VkDeviceMemory *)&(pBindInfo[index0].pImageOpaqueBinds[index1].pBinds[index2].memory);
-                                original_memory2.push_back(pBindInfo[index0].pImageOpaqueBinds[index1].pBinds[index2].memory);
-                                *(pDeviceMemory) =
-                                    (VkDeviceMemory)(
-                                        (VkUniqueObject *)pBindInfo[index0].pImageOpaqueBinds[index1].pBinds[index2].memory)
-                                        ->actualObject;
-                            }
-                        }
-                    }
+
+                if (safe_dedicated_allocate_info->image != VK_NULL_HANDLE) {
+                    uint64_t local_image = reinterpret_cast<uint64_t &>(safe_dedicated_allocate_info->image);
+                    safe_dedicated_allocate_info->image = reinterpret_cast<VkImage &>(my_map_data->unique_id_mapping[local_image]);
                 }
+
+                lock.unlock();
+
+                input_pnext->pNext = reinterpret_cast<GenericHeader *>(safe_dedicated_allocate_info.get());
+                input_pnext = reinterpret_cast<GenericHeader *>(input_pnext->pNext);
+            } else {
+                // TODO: generic handling of pNext copies
             }
-            if (pBindInfo[index0].pImageBinds) {
-                for (uint32_t index1 = 0; index1 < pBindInfo[index0].imageBindCount; ++index1) {
-                    if (pBindInfo[index0].pImageBinds[index1].image) {
-                        VkImage *pImage = (VkImage *)&(pBindInfo[index0].pImageBinds[index1].image);
-                        original_image2.push_back(pBindInfo[index0].pImageBinds[index1].image);
-                        *(pImage) = (VkImage)((VkUniqueObject *)pBindInfo[index0].pImageBinds[index1].image)->actualObject;
-                    }
-                    if (pBindInfo[index0].pImageBinds[index1].pBinds) {
-                        for (uint32_t index2 = 0; index2 < pBindInfo[index0].pImageBinds[index1].bindCount; ++index2) {
-                            if (pBindInfo[index0].pImageBinds[index1].pBinds[index2].memory) {
-                                VkDeviceMemory *pDeviceMemory =
-                                    (VkDeviceMemory *)&(pBindInfo[index0].pImageBinds[index1].pBinds[index2].memory);
-                                original_memory3.push_back(pBindInfo[index0].pImageBinds[index1].pBinds[index2].memory);
-                                *(pDeviceMemory) =
-                                    (VkDeviceMemory)((VkUniqueObject *)pBindInfo[index0].pImageBinds[index1].pBinds[index2].memory)
-                                        ->actualObject;
-                            }
-                        }
-                    }
-                }
-            }
-            if (pBindInfo[index0].pWaitSemaphores) {
-                for (uint32_t index1 = 0; index1 < pBindInfo[index0].waitSemaphoreCount; ++index1) {
-                    VkSemaphore **ppSemaphore = (VkSemaphore **)&(pBindInfo[index0].pWaitSemaphores);
-                    original_pWaitSemaphores.push_back(pBindInfo[index0].pWaitSemaphores[index1]);
-                    *(ppSemaphore[index1]) =
-                        (VkSemaphore)((VkUniqueObject *)pBindInfo[index0].pWaitSemaphores[index1])->actualObject;
-                }
-            }
-            if (pBindInfo[index0].pSignalSemaphores) {
-                for (uint32_t index1 = 0; index1 < pBindInfo[index0].signalSemaphoreCount; ++index1) {
-                    VkSemaphore **ppSemaphore = (VkSemaphore **)&(pBindInfo[index0].pSignalSemaphores);
-                    original_pSignalSemaphores.push_back(pBindInfo[index0].pSignalSemaphores[index1]);
-                    *(ppSemaphore[index1]) =
-                        (VkSemaphore)((VkUniqueObject *)pBindInfo[index0].pSignalSemaphores[index1])->actualObject;
-                }
-            }
+
+            orig_pnext = reinterpret_cast<const GenericHeader *>(orig_pnext->pNext);
         }
     }
-    if (VK_NULL_HANDLE != fence) {
-        fence = (VkFence)((VkUniqueObject *)fence)->actualObject;
+
+    VkResult result = get_dispatch_table(unique_objects_device_table_map, device)
+                          ->AllocateMemory(device, input_allocate_info, pAllocator, pMemory);
+
+    if (VK_SUCCESS == result) {
+        std::lock_guard<std::mutex> lock(global_lock);
+        uint64_t unique_id = global_unique_id++;
+        my_map_data->unique_id_mapping[unique_id] = reinterpret_cast<uint64_t &>(*pMemory);
+        *pMemory = reinterpret_cast<VkDeviceMemory &>(unique_id);
     }
-    VkResult result =
-        get_dispatch_table(unique_objects_device_table_map, queue)->QueueBindSparse(queue, bindInfoCount, pBindInfo, fence);
-    if (pBindInfo) {
-        for (uint32_t index0 = 0; index0 < bindInfoCount; ++index0) {
-            if (pBindInfo[index0].pBufferBinds) {
-                for (uint32_t index1 = 0; index1 < pBindInfo[index0].bufferBindCount; ++index1) {
-                    if (pBindInfo[index0].pBufferBinds[index1].buffer) {
-                        VkBuffer *pBuffer = (VkBuffer *)&(pBindInfo[index0].pBufferBinds[index1].buffer);
-                        *(pBuffer) = original_buffer[index1];
-                    }
-                    if (pBindInfo[index0].pBufferBinds[index1].pBinds) {
-                        for (uint32_t index2 = 0; index2 < pBindInfo[index0].pBufferBinds[index1].bindCount; ++index2) {
-                            if (pBindInfo[index0].pBufferBinds[index1].pBinds[index2].memory) {
-                                VkDeviceMemory *pDeviceMemory =
-                                    (VkDeviceMemory *)&(pBindInfo[index0].pBufferBinds[index1].pBinds[index2].memory);
-                                *(pDeviceMemory) = original_memory1[index2];
-                            }
-                        }
-                    }
-                }
-            }
-            if (pBindInfo[index0].pImageOpaqueBinds) {
-                for (uint32_t index1 = 0; index1 < pBindInfo[index0].imageOpaqueBindCount; ++index1) {
-                    if (pBindInfo[index0].pImageOpaqueBinds[index1].image) {
-                        VkImage *pImage = (VkImage *)&(pBindInfo[index0].pImageOpaqueBinds[index1].image);
-                        *(pImage) = original_image1[index1];
-                    }
-                    if (pBindInfo[index0].pImageOpaqueBinds[index1].pBinds) {
-                        for (uint32_t index2 = 0; index2 < pBindInfo[index0].pImageOpaqueBinds[index1].bindCount; ++index2) {
-                            if (pBindInfo[index0].pImageOpaqueBinds[index1].pBinds[index2].memory) {
-                                VkDeviceMemory *pDeviceMemory =
-                                    (VkDeviceMemory *)&(pBindInfo[index0].pImageOpaqueBinds[index1].pBinds[index2].memory);
-                                *(pDeviceMemory) = original_memory2[index2];
-                            }
-                        }
-                    }
-                }
-            }
-            if (pBindInfo[index0].pImageBinds) {
-                for (uint32_t index1 = 0; index1 < pBindInfo[index0].imageBindCount; ++index1) {
-                    if (pBindInfo[index0].pImageBinds[index1].image) {
-                        VkImage *pImage = (VkImage *)&(pBindInfo[index0].pImageBinds[index1].image);
-                        *(pImage) = original_image2[index1];
-                    }
-                    if (pBindInfo[index0].pImageBinds[index1].pBinds) {
-                        for (uint32_t index2 = 0; index2 < pBindInfo[index0].pImageBinds[index1].bindCount; ++index2) {
-                            if (pBindInfo[index0].pImageBinds[index1].pBinds[index2].memory) {
-                                VkDeviceMemory *pDeviceMemory =
-                                    (VkDeviceMemory *)&(pBindInfo[index0].pImageBinds[index1].pBinds[index2].memory);
-                                *(pDeviceMemory) = original_memory3[index2];
-                            }
-                        }
-                    }
-                }
-            }
-            if (pBindInfo[index0].pWaitSemaphores) {
-                for (uint32_t index1 = 0; index1 < pBindInfo[index0].waitSemaphoreCount; ++index1) {
-                    VkSemaphore **ppSemaphore = (VkSemaphore **)&(pBindInfo[index0].pWaitSemaphores);
-                    *(ppSemaphore[index1]) = original_pWaitSemaphores[index1];
-                }
-            }
-            if (pBindInfo[index0].pSignalSemaphores) {
-                for (uint32_t index1 = 0; index1 < pBindInfo[index0].signalSemaphoreCount; ++index1) {
-                    VkSemaphore **ppSemaphore = (VkSemaphore **)&(pBindInfo[index0].pSignalSemaphores);
-                    *(ppSemaphore[index1]) = original_pSignalSemaphores[index1];
-                }
-            }
-        }
-    }
+
     return result;
 }
 
@@ -448,38 +343,46 @@ VkResult explicit_CreateComputePipelines(VkDevice device, VkPipelineCache pipeli
     // STRUCT USES:{'pipelineCache': 'VkPipelineCache', 'pCreateInfos[createInfoCount]': {'stage': {'module': 'VkShaderModule'},
     // 'layout': 'VkPipelineLayout', 'basePipelineHandle': 'VkPipeline'}}
     // LOCAL DECLS:{'pCreateInfos': 'VkComputePipelineCreateInfo*'}
+    layer_data *my_device_data = get_my_data_ptr(get_dispatch_key(device), layer_data_map);
     safe_VkComputePipelineCreateInfo *local_pCreateInfos = NULL;
     if (pCreateInfos) {
+        std::lock_guard<std::mutex> lock(global_lock);
         local_pCreateInfos = new safe_VkComputePipelineCreateInfo[createInfoCount];
         for (uint32_t idx0 = 0; idx0 < createInfoCount; ++idx0) {
             local_pCreateInfos[idx0].initialize(&pCreateInfos[idx0]);
             if (pCreateInfos[idx0].basePipelineHandle) {
                 local_pCreateInfos[idx0].basePipelineHandle =
-                    (VkPipeline)((VkUniqueObject *)pCreateInfos[idx0].basePipelineHandle)->actualObject;
+                    (VkPipeline)my_device_data
+                        ->unique_id_mapping[reinterpret_cast<const uint64_t &>(pCreateInfos[idx0].basePipelineHandle)];
             }
             if (pCreateInfos[idx0].layout) {
-                local_pCreateInfos[idx0].layout = (VkPipelineLayout)((VkUniqueObject *)pCreateInfos[idx0].layout)->actualObject;
+                local_pCreateInfos[idx0].layout =
+                    (VkPipelineLayout)
+                        my_device_data->unique_id_mapping[reinterpret_cast<const uint64_t &>(pCreateInfos[idx0].layout)];
             }
             if (pCreateInfos[idx0].stage.module) {
                 local_pCreateInfos[idx0].stage.module =
-                    (VkShaderModule)((VkUniqueObject *)pCreateInfos[idx0].stage.module)->actualObject;
+                    (VkShaderModule)
+                        my_device_data->unique_id_mapping[reinterpret_cast<const uint64_t &>(pCreateInfos[idx0].stage.module)];
             }
         }
     }
     if (pipelineCache) {
-        pipelineCache = (VkPipelineCache)((VkUniqueObject *)pipelineCache)->actualObject;
+        std::lock_guard<std::mutex> lock(global_lock);
+        pipelineCache = (VkPipelineCache)my_device_data->unique_id_mapping[reinterpret_cast<uint64_t &>(pipelineCache)];
     }
-    // CODEGEN : file /usr/local/google/home/tobine/vulkan_work/LoaderAndTools/vk-layer-generate.py line #1671
+
     VkResult result = get_dispatch_table(unique_objects_device_table_map, device)
                           ->CreateComputePipelines(device, pipelineCache, createInfoCount,
                                                    (const VkComputePipelineCreateInfo *)local_pCreateInfos, pAllocator, pPipelines);
     delete[] local_pCreateInfos;
     if (VK_SUCCESS == result) {
-        VkUniqueObject *pUO = NULL;
+        uint64_t unique_id = 0;
+        std::lock_guard<std::mutex> lock(global_lock);
         for (uint32_t i = 0; i < createInfoCount; ++i) {
-            pUO = new VkUniqueObject();
-            pUO->actualObject = (uint64_t)pPipelines[i];
-            pPipelines[i] = (VkPipeline)pUO;
+            unique_id = global_unique_id++;
+            my_device_data->unique_id_mapping[unique_id] = reinterpret_cast<uint64_t &>(pPipelines[i]);
+            pPipelines[i] = reinterpret_cast<VkPipeline &>(unique_id);
         }
     }
     return result;
@@ -491,47 +394,86 @@ VkResult explicit_CreateGraphicsPipelines(VkDevice device, VkPipelineCache pipel
     // STRUCT USES:{'pipelineCache': 'VkPipelineCache', 'pCreateInfos[createInfoCount]': {'layout': 'VkPipelineLayout',
     // 'pStages[stageCount]': {'module': 'VkShaderModule'}, 'renderPass': 'VkRenderPass', 'basePipelineHandle': 'VkPipeline'}}
     // LOCAL DECLS:{'pCreateInfos': 'VkGraphicsPipelineCreateInfo*'}
+    layer_data *my_device_data = get_my_data_ptr(get_dispatch_key(device), layer_data_map);
     safe_VkGraphicsPipelineCreateInfo *local_pCreateInfos = NULL;
     if (pCreateInfos) {
         local_pCreateInfos = new safe_VkGraphicsPipelineCreateInfo[createInfoCount];
+        std::lock_guard<std::mutex> lock(global_lock);
         for (uint32_t idx0 = 0; idx0 < createInfoCount; ++idx0) {
             local_pCreateInfos[idx0].initialize(&pCreateInfos[idx0]);
             if (pCreateInfos[idx0].basePipelineHandle) {
                 local_pCreateInfos[idx0].basePipelineHandle =
-                    (VkPipeline)((VkUniqueObject *)pCreateInfos[idx0].basePipelineHandle)->actualObject;
+                    (VkPipeline)my_device_data
+                        ->unique_id_mapping[reinterpret_cast<const uint64_t &>(pCreateInfos[idx0].basePipelineHandle)];
             }
             if (pCreateInfos[idx0].layout) {
-                local_pCreateInfos[idx0].layout = (VkPipelineLayout)((VkUniqueObject *)pCreateInfos[idx0].layout)->actualObject;
+                local_pCreateInfos[idx0].layout =
+                    (VkPipelineLayout)
+                        my_device_data->unique_id_mapping[reinterpret_cast<const uint64_t &>(pCreateInfos[idx0].layout)];
             }
             if (pCreateInfos[idx0].pStages) {
                 for (uint32_t idx1 = 0; idx1 < pCreateInfos[idx0].stageCount; ++idx1) {
                     if (pCreateInfos[idx0].pStages[idx1].module) {
                         local_pCreateInfos[idx0].pStages[idx1].module =
-                            (VkShaderModule)((VkUniqueObject *)pCreateInfos[idx0].pStages[idx1].module)->actualObject;
+                            (VkShaderModule)my_device_data
+                                ->unique_id_mapping[reinterpret_cast<const uint64_t &>(pCreateInfos[idx0].pStages[idx1].module)];
                     }
                 }
             }
             if (pCreateInfos[idx0].renderPass) {
-                local_pCreateInfos[idx0].renderPass = (VkRenderPass)((VkUniqueObject *)pCreateInfos[idx0].renderPass)->actualObject;
+                local_pCreateInfos[idx0].renderPass =
+                    (VkRenderPass)
+                        my_device_data->unique_id_mapping[reinterpret_cast<const uint64_t &>(pCreateInfos[idx0].renderPass)];
             }
         }
     }
     if (pipelineCache) {
-        pipelineCache = (VkPipelineCache)((VkUniqueObject *)pipelineCache)->actualObject;
+        std::lock_guard<std::mutex> lock(global_lock);
+        pipelineCache = (VkPipelineCache)my_device_data->unique_id_mapping[reinterpret_cast<uint64_t &>(pipelineCache)];
     }
-    // CODEGEN : file /usr/local/google/home/tobine/vulkan_work/LoaderAndTools/vk-layer-generate.py line #1671
+
     VkResult result =
         get_dispatch_table(unique_objects_device_table_map, device)
             ->CreateGraphicsPipelines(device, pipelineCache, createInfoCount,
                                       (const VkGraphicsPipelineCreateInfo *)local_pCreateInfos, pAllocator, pPipelines);
     delete[] local_pCreateInfos;
     if (VK_SUCCESS == result) {
-        VkUniqueObject *pUO = NULL;
+        uint64_t unique_id = 0;
+        std::lock_guard<std::mutex> lock(global_lock);
         for (uint32_t i = 0; i < createInfoCount; ++i) {
-            pUO = new VkUniqueObject();
-            pUO->actualObject = (uint64_t)pPipelines[i];
-            pPipelines[i] = (VkPipeline)pUO;
+            unique_id = global_unique_id++;
+            my_device_data->unique_id_mapping[unique_id] = reinterpret_cast<uint64_t &>(pPipelines[i]);
+            pPipelines[i] = reinterpret_cast<VkPipeline &>(unique_id);
         }
+    }
+    return result;
+}
+
+VkResult explicit_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR *pCreateInfo,
+                                     const VkAllocationCallbacks *pAllocator, VkSwapchainKHR *pSwapchain) {
+    layer_data *my_map_data = get_my_data_ptr(get_dispatch_key(device), layer_data_map);
+
+    safe_VkSwapchainCreateInfoKHR *local_pCreateInfo = NULL;
+    if (pCreateInfo) {
+        std::lock_guard<std::mutex> lock(global_lock);
+        local_pCreateInfo = new safe_VkSwapchainCreateInfoKHR(pCreateInfo);
+        local_pCreateInfo->oldSwapchain =
+            (VkSwapchainKHR)my_map_data->unique_id_mapping[reinterpret_cast<const uint64_t &>(pCreateInfo->oldSwapchain)];
+        // Need to pull surface mapping from the instance-level map
+        layer_data *instance_data = get_my_data_ptr(get_dispatch_key(my_map_data->gpu), layer_data_map);
+        local_pCreateInfo->surface =
+            (VkSurfaceKHR)instance_data->unique_id_mapping[reinterpret_cast<const uint64_t &>(pCreateInfo->surface)];
+    }
+
+    VkResult result = get_dispatch_table(unique_objects_device_table_map, device)
+                          ->CreateSwapchainKHR(device, (const VkSwapchainCreateInfoKHR *)local_pCreateInfo, pAllocator, pSwapchain);
+    if (local_pCreateInfo)
+        delete local_pCreateInfo;
+    if (VK_SUCCESS == result) {
+        std::lock_guard<std::mutex> lock(global_lock);
+        uint64_t unique_id =global_unique_id++;
+        my_map_data->unique_id_mapping[unique_id] = reinterpret_cast<uint64_t &>(*pSwapchain);
+        *pSwapchain = reinterpret_cast<VkSwapchainKHR &>(unique_id);
     }
     return result;
 }
@@ -540,21 +482,118 @@ VkResult explicit_GetSwapchainImagesKHR(VkDevice device, VkSwapchainKHR swapchai
                                         VkImage *pSwapchainImages) {
     // UNWRAP USES:
     //  0 : swapchain,VkSwapchainKHR, pSwapchainImages,VkImage
+    layer_data *my_device_data = get_my_data_ptr(get_dispatch_key(device), layer_data_map);
     if (VK_NULL_HANDLE != swapchain) {
-        swapchain = (VkSwapchainKHR)((VkUniqueObject *)swapchain)->actualObject;
+        std::lock_guard<std::mutex> lock(global_lock);
+        swapchain = (VkSwapchainKHR)my_device_data->unique_id_mapping[reinterpret_cast<uint64_t &>(swapchain)];
     }
     VkResult result = get_dispatch_table(unique_objects_device_table_map, device)
                           ->GetSwapchainImagesKHR(device, swapchain, pSwapchainImageCount, pSwapchainImages);
     // TODO : Need to add corresponding code to delete these images
     if (VK_SUCCESS == result) {
         if ((*pSwapchainImageCount > 0) && pSwapchainImages) {
-            std::vector<VkUniqueObject *> uniqueImages = {};
+            uint64_t unique_id = 0;
+            std::lock_guard<std::mutex> lock(global_lock);
             for (uint32_t i = 0; i < *pSwapchainImageCount; ++i) {
-                uniqueImages.push_back(new VkUniqueObject());
-                uniqueImages[i]->actualObject = (uint64_t)pSwapchainImages[i];
-                pSwapchainImages[i] = (VkImage)uniqueImages[i];
+                unique_id = global_unique_id++;
+                my_device_data->unique_id_mapping[unique_id] = reinterpret_cast<uint64_t &>(pSwapchainImages[i]);
+                pSwapchainImages[i] = reinterpret_cast<VkImage &>(unique_id);
             }
         }
     }
     return result;
 }
+
+ #ifndef __ANDROID__
+VkResult explicit_GetPhysicalDeviceDisplayPropertiesKHR(VkPhysicalDevice physicalDevice, uint32_t* pPropertyCount, VkDisplayPropertiesKHR* pProperties)
+{
+    layer_data *my_map_data = get_my_data_ptr(get_dispatch_key(physicalDevice), layer_data_map);
+    safe_VkDisplayPropertiesKHR* local_pProperties = NULL;
+    {
+        std::lock_guard<std::mutex> lock(global_lock);
+        if (pProperties) {
+            local_pProperties = new safe_VkDisplayPropertiesKHR[*pPropertyCount];
+            for (uint32_t idx0=0; idx0<*pPropertyCount; ++idx0) {
+                local_pProperties[idx0].initialize(&pProperties[idx0]);
+                if (pProperties[idx0].display) {
+                    local_pProperties[idx0].display = (VkDisplayKHR)my_map_data->unique_id_mapping[reinterpret_cast<const uint64_t &>(pProperties[idx0].display)];
+                }
+            }
+        }
+    }
+
+    VkResult result = get_dispatch_table(unique_objects_instance_table_map, physicalDevice)->GetPhysicalDeviceDisplayPropertiesKHR(physicalDevice, pPropertyCount, ( VkDisplayPropertiesKHR*)local_pProperties);
+    if (result == VK_SUCCESS && pProperties)
+    {
+        for (uint32_t idx0=0; idx0<*pPropertyCount; ++idx0) {
+            std::lock_guard<std::mutex> lock(global_lock);
+
+            uint64_t unique_id = global_unique_id++;
+            my_map_data->unique_id_mapping[unique_id] = reinterpret_cast<uint64_t &>(local_pProperties[idx0].display);
+            pProperties[idx0].display = reinterpret_cast<VkDisplayKHR&>(unique_id);
+            pProperties[idx0].displayName = local_pProperties[idx0].displayName;
+            pProperties[idx0].physicalDimensions = local_pProperties[idx0].physicalDimensions;
+            pProperties[idx0].physicalResolution = local_pProperties[idx0].physicalResolution;
+            pProperties[idx0].supportedTransforms = local_pProperties[idx0].supportedTransforms;
+            pProperties[idx0].planeReorderPossible = local_pProperties[idx0].planeReorderPossible;
+            pProperties[idx0].persistentContent = local_pProperties[idx0].persistentContent;
+        }
+    }
+    if (local_pProperties)
+        delete[] local_pProperties;
+    return result;
+}
+
+VkResult explicit_GetDisplayPlaneSupportedDisplaysKHR(VkPhysicalDevice physicalDevice, uint32_t planeIndex, uint32_t* pDisplayCount, VkDisplayKHR* pDisplays)
+{
+    layer_data *my_map_data = get_my_data_ptr(get_dispatch_key(physicalDevice), layer_data_map);
+    VkResult result = get_dispatch_table(unique_objects_instance_table_map, physicalDevice)->GetDisplayPlaneSupportedDisplaysKHR(physicalDevice, planeIndex, pDisplayCount, pDisplays);
+    if (VK_SUCCESS == result) {
+        if ((*pDisplayCount > 0) && pDisplays) {
+            std::lock_guard<std::mutex> lock(global_lock);
+            for (uint32_t i = 0; i < *pDisplayCount; i++) {
+		    auto it = my_map_data->unique_id_mapping.find(reinterpret_cast<const uint64_t &> (pDisplays[i]));
+                assert (it !=  my_map_data->unique_id_mapping.end());
+                pDisplays[i] = reinterpret_cast<VkDisplayKHR&> (it->second);
+            }
+        }
+    }
+    return result;
+}
+
+
+VkResult explicit_GetDisplayModePropertiesKHR(VkPhysicalDevice physicalDevice, VkDisplayKHR display, uint32_t* pPropertyCount, VkDisplayModePropertiesKHR* pProperties)
+{
+    layer_data *my_map_data = get_my_data_ptr(get_dispatch_key(physicalDevice), layer_data_map);
+    safe_VkDisplayModePropertiesKHR* local_pProperties = NULL;
+    {
+        std::lock_guard<std::mutex> lock(global_lock);
+        display = (VkDisplayKHR)my_map_data->unique_id_mapping[reinterpret_cast<uint64_t &>(display)];
+        if (pProperties) {
+            local_pProperties = new safe_VkDisplayModePropertiesKHR[*pPropertyCount];
+            for (uint32_t idx0=0; idx0<*pPropertyCount; ++idx0) {
+                local_pProperties[idx0].initialize(&pProperties[idx0]);
+            }
+        }
+    }
+
+    VkResult result = get_dispatch_table(unique_objects_instance_table_map, physicalDevice)->GetDisplayModePropertiesKHR(physicalDevice, display, pPropertyCount, ( VkDisplayModePropertiesKHR*)local_pProperties);
+    if (result == VK_SUCCESS && pProperties)
+    {
+        for (uint32_t idx0=0; idx0<*pPropertyCount; ++idx0) {
+            std::lock_guard<std::mutex> lock(global_lock);
+
+            uint64_t unique_id = global_unique_id++;
+            my_map_data->unique_id_mapping[unique_id] = reinterpret_cast<uint64_t &>(local_pProperties[idx0].displayMode);
+            pProperties[idx0].displayMode = reinterpret_cast<VkDisplayModeKHR&>(unique_id);
+            pProperties[idx0].parameters.visibleRegion.width = local_pProperties[idx0].parameters.visibleRegion.width;
+            pProperties[idx0].parameters.visibleRegion.height = local_pProperties[idx0].parameters.visibleRegion.height;
+            pProperties[idx0].parameters.refreshRate = local_pProperties[idx0].parameters.refreshRate;
+        }
+    }
+    if (local_pProperties)
+        delete[] local_pProperties;
+    return result;
+}
+#endif
+} // namespace unique_objects

@@ -4,23 +4,17 @@
  * Copyright (C) 2015-2016 LunarG, Inc.
  * All Rights Reserved
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * The above copyright notice and this permission notice shall be included
- * in all copies or substantial portions of the Software.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * Author: Peter Lohrmann <peterl@valvesoftware.com>
  * Author: Jon Ashburn <jon@lunarg.com>
@@ -105,8 +99,8 @@ vktrace_replay::VKTRACE_REPLAY_RESULT vkReplay::handle_replay_errors(const char*
                 string_VkResult((VkResult)resCall), entrypointName, string_VkResult((VkResult)resTrace));
         res = vktrace_replay::VKTRACE_REPLAY_BAD_RETURN;
     }
-    if (resCall != VK_SUCCESS) {
-        vktrace_LogWarning("API call (%s) returned failed result %d", entrypointName, resCall);
+    if (resCall != VK_SUCCESS  && resCall != VK_NOT_READY) {
+        vktrace_LogWarning("API call (%s) returned failed result %s", entrypointName, string_VkResult(resCall));
     }
     return res;
 }
@@ -157,159 +151,83 @@ VkResult vkReplay::manually_replay_vkCreateInstance(packet_vkCreateInstance* pPa
     {
         VkInstance inst;
 
-        // get the list of layers that the user wants to enable
-        uint32_t userLayerCount = 0;
-        char ** userLayerNames = get_enableLayers_list(&userLayerCount);
-
-        apply_layerSettings_overrides();
-        if (userLayerCount > 0) {
-            // enumerate layers
-            //                VkResult err;
-            VkExtensionProperties *instance_extensions;
-            uint32_t instance_extension_count = 0;
-            //                size_t extSize = sizeof(uint32_t);
-            uint32_t total_extension_count = 1;
-
-            // TODO : Need to update this for new extension interface
-            //                err = vkGetGlobalExtensionInfo(VK_EXTENSION_INFO_TYPE_COUNT, 0, &extSize, &total_extension_count);
-            //                if (err != VK_SUCCESS)
-            //                {
-            //                    vktrace_LogWarning("Internal call to vkGetGlobalExtensionInfo failed to get number of extensions available.");
-            //                }
-            //
-            //                vktrace_LogDebug("Total Extensions found: %u", total_extension_count);
-
-            VkExtensionProperties extProp;
-            //                extSize = sizeof(VkExtensionProperties);
-            instance_extensions = (VkExtensionProperties*) malloc(sizeof (VkExtensionProperties) * total_extension_count);
-            //extProp.extensionName[0] = requiredLayerNames;
-            // TODO : Bug here only copying into one extProp and re-checking that in loop below. Do we need any of this anymore?
-            //               memcpy(extProp.extensionName, requiredLayerNames[0], strlen(requiredLayerNames[0])*sizeof(char));
-            extProp.specVersion = 0;
-            for (uint32_t i = 0; i < total_extension_count; i++) {
-                //                    err = vkGetGlobalExtensionInfo(VK_EXTENSION_INFO_TYPE_PROPERTIES, i, &extSize, &extProp);
-                //                    vktrace_LogDebug("Ext %u: '%s' v%u from '%s'.", i, extProp.name, extProp.version, extProp.description);
-                //
-                //                    bool bCheckIfNeeded = true;
-                bool bFound = false;
-                //
-                // First, check extensions required by vkreplay
-#if 0
-                if (bCheckIfNeeded) {
-                    for (uint32_t j = 0; j < requiredLayerCount; j++) {
-                        if (strncmp(requiredLayerNames[j], extProp.extensionName, strlen(requiredLayerNames[j])) == 0) {
-                            bCheckIfNeeded = false;
-                            bFound = true;
-                            vktrace_LogDebug("... required by vkreplay.");
-                            break;
-                        }
-                    }
-                }
-#endif
-                //
-                //                    // Second, check extensions requested by user
-                //                    if (bCheckIfNeeded)
-                //                    {
-                //                        for (uint32_t j = 0; j < userLayerCount; j++)
-                //                        {
-                //                            if (strcmp(userLayerNames[j], extProp.name) == 0)
-                //                            {
-                //                                //bCheckIfNeeded = false;
-                //                                bFound = true;
-                //                                vktrace_LogDebug("... required by user.");
-                //                                break;
-                //                            }
-                //                        }
-                //                    }
-                //
-                //                    // Third, check extensions requested by the application
-                //                    if (bCheckIfNeeded)
-                //                    {
-                //                        for (uint32_t j = 0; j < pPacket->pCreateInfo->enabledExtensionCount; j++)
-                //                        {
-                //                            if (memcmp(&pPacket->pCreateInfo->pEnabledExtensions[j], &extProp, sizeof(VkExtensionProperties)) == 0)
-                //                            {
-                //                                bCheckIfNeeded = false;
-                //                                bFound = true;
-                //                                vktrace_LogDebug("... required by application.");
-                //                                break;
-                //                            }
-                //                        }
-                //                    }
-                //
-                // if extension was found in one of the required lists, then copy it into the list to enable.
-                if (bFound) {
-                    memcpy(&instance_extensions[instance_extension_count++], &extProp, sizeof (VkExtensionProperties));
+        const char strScreenShot[] = "VK_LAYER_LUNARG_screenshot";
+        pCreateInfo = (VkInstanceCreateInfo *) pPacket->pCreateInfo;
+        if (g_pReplaySettings->screenshotList != NULL) {
+            // enable screenshot layer if it is available and not already in list
+            bool found_ss = false;
+            for (uint32_t i = 0; i < pCreateInfo->enabledLayerCount; i++) {
+                if (!strcmp(pCreateInfo->ppEnabledLayerNames[i], strScreenShot)) {
+                    found_ss = true;
+                    break;
                 }
             }
+            if (!found_ss) {
+                uint32_t count;
 
-            VkInstanceCreateInfo createInfo;
-            createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-            createInfo.pNext = NULL;
-            createInfo.pApplicationInfo = pPacket->pCreateInfo->pApplicationInfo;
-            createInfo.enabledLayerCount = 0;
-            createInfo.ppEnabledLayerNames = NULL;
-            createInfo.enabledExtensionCount = instance_extension_count;
-            //                createInfo.ppEnabledExtensionNames = requiredLayerNames;
-
-            // make the call
-            replayResult = m_vkFuncs.real_vkCreateInstance(&createInfo, NULL, &inst);
-
-            // clean up
-            free(instance_extensions);
-        } else {
-            const char strScreenShot[] = "VK_LAYER_LUNARG_screenshot";
-            pCreateInfo = (VkInstanceCreateInfo *) pPacket->pCreateInfo;
-            if (g_pReplaySettings->screenshotList != NULL) {
-                // enable screenshot layer if it is available and not already in list
-                bool found_ss = false;
-                for (uint32_t i = 0; i < pCreateInfo->enabledLayerCount; i++) {
-                    if (!strcmp(pCreateInfo->ppEnabledLayerNames[i], strScreenShot)) {
+                // query to find if ScreenShot layer is available
+                m_vkFuncs.real_vkEnumerateInstanceLayerProperties(&count, NULL);
+                VkLayerProperties *props = (VkLayerProperties *) vktrace_malloc(count * sizeof (VkLayerProperties));
+                if (props && count > 0)
+                    m_vkFuncs.real_vkEnumerateInstanceLayerProperties(&count, props);
+                for (uint32_t i = 0; i < count; i++) {
+                    if (!strcmp(props[i].layerName, strScreenShot)) {
                         found_ss = true;
                         break;
                     }
                 }
-                if (!found_ss) {
-                    uint32_t count;
-
-                    // query to find if ScreenShot layer is available
-                    m_vkFuncs.real_vkEnumerateInstanceLayerProperties(&count, NULL);
-                    VkLayerProperties *props = (VkLayerProperties *) vktrace_malloc(count * sizeof (VkLayerProperties));
-                    if (props && count > 0)
-                        m_vkFuncs.real_vkEnumerateInstanceLayerProperties(&count, props);
-                    for (uint32_t i = 0; i < count; i++) {
-                        if (!strcmp(props[i].layerName, strScreenShot)) {
-                            found_ss = true;
-                            break;
-                        }
+                if (found_ss) {
+                    // screenshot layer is available so enable it
+                    ppEnabledLayerNames = (char **) vktrace_malloc((pCreateInfo->enabledLayerCount + 1) * sizeof (char *));
+                    for (uint32_t i = 0; i < pCreateInfo->enabledLayerCount && ppEnabledLayerNames; i++) {
+                        ppEnabledLayerNames[i] = (char *) pCreateInfo->ppEnabledLayerNames[i];
                     }
-                    if (found_ss) {
-                        // screenshot layer is available so enable it
-                        ppEnabledLayerNames = (char **) vktrace_malloc((pCreateInfo->enabledLayerCount + 1) * sizeof (char *));
-                        for (uint32_t i = 0; i < pCreateInfo->enabledLayerCount && ppEnabledLayerNames; i++) {
-                            ppEnabledLayerNames[i] = (char *) pCreateInfo->ppEnabledLayerNames[i];
-                        }
-                        ppEnabledLayerNames[pCreateInfo->enabledLayerCount] = (char *) vktrace_malloc(strlen(strScreenShot) + 1);
-                        strcpy(ppEnabledLayerNames[pCreateInfo->enabledLayerCount++], strScreenShot);
-                        saved_ppLayers = (char **) pCreateInfo->ppEnabledLayerNames;
-                        pCreateInfo->ppEnabledLayerNames = ppEnabledLayerNames;
-                    }
-                    vktrace_free(props);
+                    ppEnabledLayerNames[pCreateInfo->enabledLayerCount] = (char *) vktrace_malloc(strlen(strScreenShot) + 1);
+                    strcpy(ppEnabledLayerNames[pCreateInfo->enabledLayerCount++], strScreenShot);
+                    saved_ppLayers = (char **) pCreateInfo->ppEnabledLayerNames;
+                    pCreateInfo->ppEnabledLayerNames = ppEnabledLayerNames;
                 }
-            }
-            replayResult = m_vkFuncs.real_vkCreateInstance(pPacket->pCreateInfo, NULL, &inst);
-            if (ppEnabledLayerNames) {
-                // restore the packets CreateInfo struct
-                vktrace_free(ppEnabledLayerNames[pCreateInfo->enabledLayerCount - 1]);
-                vktrace_free(ppEnabledLayerNames);
-                pCreateInfo->ppEnabledLayerNames = saved_ppLayers;
+                vktrace_free(props);
             }
         }
-        release_enableLayer_list(userLayerNames);
 
+        char **saved_ppExtensions = (char **)pCreateInfo->ppEnabledExtensionNames;
+        int savedExtensionCount = pCreateInfo->enabledExtensionCount;
+        std::vector<const char *> extension_names;
+        std::vector<std::string> outlist;
 
-        if (replayResult == VK_SUCCESS)
-        {
+#if defined PLATFORM_LINUX
+        extension_names.push_back(VK_KHR_XCB_SURFACE_EXTENSION_NAME);
+        outlist.push_back("VK_KHR_win32_surface");
+#else
+        extension_names.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+        outlist.push_back("VK_KHR_xlib_surface");
+        outlist.push_back("VK_KHR_xcb_surface");
+        outlist.push_back("VK_KHR_wayland_surface");
+        outlist.push_back("VK_KHR_mir_surface");
+#endif
+
+        for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; i++) {
+            if ( std::find(outlist.begin(), outlist.end(), pCreateInfo->ppEnabledExtensionNames[i]) == outlist.end() ) {
+                extension_names.push_back(pCreateInfo->ppEnabledExtensionNames[i]);
+            }
+        }
+        pCreateInfo->ppEnabledExtensionNames = extension_names.data();
+        pCreateInfo->enabledExtensionCount = (uint32_t)extension_names.size();
+
+        replayResult = m_vkFuncs.real_vkCreateInstance(pPacket->pCreateInfo, NULL, &inst);
+
+        pCreateInfo->ppEnabledExtensionNames = saved_ppExtensions;
+        pCreateInfo->enabledExtensionCount = savedExtensionCount;
+
+        if (ppEnabledLayerNames) {
+            // restore the packets CreateInfo struct
+            vktrace_free(ppEnabledLayerNames[pCreateInfo->enabledLayerCount - 1]);
+            vktrace_free(ppEnabledLayerNames);
+            pCreateInfo->ppEnabledLayerNames = saved_ppLayers;
+        }
+
+        if (replayResult == VK_SUCCESS) {
             m_objMapper.add_to_instances_map(*(pPacket->pInstance), inst);
         }
     }
@@ -1184,6 +1102,95 @@ void vkReplay::manually_replay_vkCmdBindVertexBuffers(packet_vkCmdBindVertexBuff
 //    return replayResult;
 //}
 
+VkResult vkReplay::manually_replay_vkGetPipelineCacheData(packet_vkGetPipelineCacheData* pPacket)
+{
+    VkResult replayResult = VK_ERROR_VALIDATION_FAILED_EXT;
+    size_t dataSize;
+    VkDevice remappeddevice = m_objMapper.remap_devices(pPacket->device);
+    if (pPacket->device != VK_NULL_HANDLE && remappeddevice == VK_NULL_HANDLE)
+    {
+        return VK_ERROR_VALIDATION_FAILED_EXT;
+    }
+
+    VkPipelineCache remappedpipelineCache = m_objMapper.remap_pipelinecaches(pPacket->pipelineCache);
+    if (pPacket->pipelineCache != VK_NULL_HANDLE && remappedpipelineCache == VK_NULL_HANDLE)
+    {
+        return VK_ERROR_VALIDATION_FAILED_EXT;
+    }
+
+    // Since the returned data size may not be equal to size of the buffer in the trace packet allocate a local buffer as needed
+    replayResult = m_vkFuncs.real_vkGetPipelineCacheData(remappeddevice, remappedpipelineCache, &dataSize, NULL);
+    if (replayResult != VK_SUCCESS)
+        return replayResult;
+    if (pPacket->pData) {
+        uint8_t *pData = VKTRACE_NEW_ARRAY(uint8_t, dataSize);
+        replayResult = m_vkFuncs.real_vkGetPipelineCacheData(remappeddevice, remappedpipelineCache, pPacket->pDataSize, pData);
+        VKTRACE_DELETE(pData);
+    }
+    return replayResult;
+}
+
+VkResult vkReplay::manually_replay_vkCreateComputePipelines(packet_vkCreateComputePipelines* pPacket)
+{
+    VkResult replayResult = VK_ERROR_VALIDATION_FAILED_EXT;
+    VkDevice remappeddevice = m_objMapper.remap_devices(pPacket->device);
+    uint32_t i;
+
+    if (pPacket->device != VK_NULL_HANDLE && remappeddevice == VK_NULL_HANDLE)
+    {
+        return VK_ERROR_VALIDATION_FAILED_EXT;
+    }
+
+    VkPipelineCache pipelineCache;
+    pipelineCache = m_objMapper.remap_pipelinecaches(pPacket->pipelineCache);
+
+    VkComputePipelineCreateInfo* pLocalCIs = VKTRACE_NEW_ARRAY(VkComputePipelineCreateInfo, pPacket->createInfoCount);
+    memcpy((void*)pLocalCIs, (void*)(pPacket->pCreateInfos), sizeof(VkComputePipelineCreateInfo)*pPacket->createInfoCount);
+
+    // Fix up stage sub-elements
+    for (i=0; i<pPacket->createInfoCount; i++)
+    {
+        pLocalCIs[i].stage.module = m_objMapper.remap_shadermodules(pLocalCIs[i].stage.module);
+
+        if (pLocalCIs[i].stage.pName)
+            pLocalCIs[i].stage.pName = (const char*)(vktrace_trace_packet_interpret_buffer_pointer(pPacket->header, (intptr_t)pLocalCIs[i].stage.pName));
+
+        if (pLocalCIs[i].stage.pSpecializationInfo)
+        {
+            VkSpecializationInfo* si = VKTRACE_NEW(VkSpecializationInfo);
+            memcpy((void*)si, (void*)(pLocalCIs[i].stage.pSpecializationInfo), sizeof(VkSpecializationInfo));
+
+            if (si->mapEntryCount > 0 && si->pMapEntries)
+                si->pMapEntries = (const VkSpecializationMapEntry*)(vktrace_trace_packet_interpret_buffer_pointer(pPacket->header, (intptr_t)pLocalCIs[i].stage.pSpecializationInfo->pMapEntries));
+            if (si->dataSize > 0 && si->pData)
+                si->pData = (const void*)(vktrace_trace_packet_interpret_buffer_pointer(pPacket->header, (intptr_t)si->pData));
+            pLocalCIs[i].stage.pSpecializationInfo = si;
+        }
+
+        pLocalCIs[i].layout = m_objMapper.remap_pipelinelayouts(pLocalCIs[i].layout);
+        pLocalCIs[i].basePipelineHandle = m_objMapper.remap_pipelines(pLocalCIs[i].basePipelineHandle);
+    }
+
+    VkPipeline *local_pPipelines = VKTRACE_NEW_ARRAY(VkPipeline, pPacket->createInfoCount);
+
+    replayResult = m_vkFuncs.real_vkCreateComputePipelines(remappeddevice, pipelineCache, pPacket->createInfoCount, pLocalCIs, NULL, local_pPipelines);
+
+    if (replayResult == VK_SUCCESS)
+    {
+        for (i = 0; i < pPacket->createInfoCount; i++) {
+            m_objMapper.add_to_pipelines_map(pPacket->pPipelines[i], local_pPipelines[i]);
+        }
+    }
+
+    for (i=0; i<pPacket->createInfoCount; i++)
+        if (pLocalCIs[i].stage.pSpecializationInfo)
+            VKTRACE_DELETE((void *)pLocalCIs[i].stage.pSpecializationInfo);
+    VKTRACE_DELETE(pLocalCIs);
+    VKTRACE_DELETE(local_pPipelines);
+
+    return replayResult;
+}
+
 VkResult vkReplay::manually_replay_vkCreateGraphicsPipelines(packet_vkCreateGraphicsPipelines* pPacket)
 {
     VkResult replayResult = VK_ERROR_VALIDATION_FAILED_EXT;
@@ -1753,6 +1760,8 @@ VkResult vkReplay::manually_replay_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(pac
     VkPhysicalDevice remappedphysicalDevice = m_objMapper.remap_physicaldevices(pPacket->physicalDevice);
     VkSurfaceKHR remappedSurfaceKHR = m_objMapper.remap_surfacekhrs(pPacket->surface);
 
+    m_display->resize_window(pPacket->pSurfaceCapabilities->currentExtent.width, pPacket->pSurfaceCapabilities->currentExtent.height);
+
     replayResult = m_vkFuncs.real_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(remappedphysicalDevice, remappedSurfaceKHR, pPacket->pSurfaceCapabilities);
 
     return replayResult;
@@ -1800,6 +1809,8 @@ VkResult vkReplay::manually_replay_vkCreateSwapchainKHR(packet_vkCreateSwapchain
     save_surface = pPacket->pCreateInfo->surface;
     VkSurfaceKHR *pSurf = (VkSurfaceKHR *) &(pPacket->pCreateInfo->surface);
     *pSurf = m_objMapper.remap_surfacekhrs(*pSurf);
+
+    m_display->resize_window(pPacket->pCreateInfo->imageExtent.width, pPacket->pCreateInfo->imageExtent.height);
 
     // No need to remap pCreateInfo
     replayResult = m_vkFuncs.real_vkCreateSwapchainKHR(remappeddevice, pPacket->pCreateInfo, pPacket->pAllocator, &local_pSwapchain);
@@ -1966,6 +1977,32 @@ VkResult vkReplay::manually_replay_vkCreateXcbSurfaceKHR(packet_vkCreateXcbSurfa
 }
 #endif
 
+#ifdef VK_USE_PLATFORM_XLIB_KHR
+VkResult vkReplay::manually_replay_vkCreateXlibSurfaceKHR(packet_vkCreateXlibSurfaceKHR* pPacket)
+{
+    VkResult replayResult;
+    VkSurfaceKHR local_pSurface;
+    VkInstance remappedinstance = m_objMapper.remap_instances(pPacket->instance);
+
+    if (pPacket->instance != VK_NULL_HANDLE && remappedinstance == VK_NULL_HANDLE) {
+        return VK_ERROR_VALIDATION_FAILED_EXT;
+    }
+
+    VkIcdSurfaceXlib *pSurf = (VkIcdSurfaceXlib *) m_display->get_surface();
+    VkXlibSurfaceCreateInfoKHR createInfo;
+    createInfo.sType = pPacket->pCreateInfo->sType;
+    createInfo.pNext = pPacket->pCreateInfo->pNext;
+    createInfo.flags = pPacket->pCreateInfo->flags;
+    createInfo.dpy = pSurf->dpy;
+    createInfo.window = pSurf->window;
+    replayResult = m_vkFuncs.real_vkCreateXlibSurfaceKHR(remappedinstance, &createInfo, pPacket->pAllocator, &local_pSurface);
+    if (replayResult == VK_SUCCESS) {
+        m_objMapper.add_to_surfacekhrs_map(*(pPacket->pSurface), local_pSurface);
+    }
+    return replayResult;
+}
+#endif
+
 #ifdef VK_USE_PLATFORM_WIN32_KHR
 VkResult vkReplay::manually_replay_vkCreateWin32SurfaceKHR(packet_vkCreateWin32SurfaceKHR* pPacket)
 {
@@ -2062,3 +2099,31 @@ VkResult vkReplay::manually_replay_vkAllocateCommandBuffers(packet_vkAllocateCom
     delete local_pCommandBuffers;
     return replayResult;
 }
+
+#ifdef VK_USE_PLATFORM_XCB_KHR
+VkBool32 vkReplay::manually_replay_vkGetPhysicalDeviceXcbPresentationSupportKHR(packet_vkGetPhysicalDeviceXcbPresentationSupportKHR* pPacket)
+{
+    VkPhysicalDevice remappedphysicalDevice = m_objMapper.remap_physicaldevices(pPacket->physicalDevice);
+    if (pPacket->physicalDevice != VK_NULL_HANDLE && remappedphysicalDevice == VK_NULL_HANDLE)
+    {
+        return VK_FALSE;
+    }
+    VkIcdSurfaceXcb *pSurf = (VkIcdSurfaceXcb *) m_display->get_surface();
+    m_display->get_window_handle();
+    return (m_vkFuncs.real_vkGetPhysicalDeviceXcbPresentationSupportKHR(remappedphysicalDevice, pPacket->queueFamilyIndex, pSurf->connection, m_display->get_screen_handle()->root_visual));
+}
+#endif
+
+#ifdef VK_USE_PLATFORM_XLIB_KHR
+VkBool32 vkReplay::manually_replay_vkGetPhysicalDeviceXlibPresentationSupportKHR(packet_vkGetPhysicalDeviceXlibPresentationSupportKHR* pPacket)
+{
+    VkPhysicalDevice remappedphysicalDevice = m_objMapper.remap_physicaldevices(pPacket->physicalDevice);
+    if (pPacket->physicalDevice != VK_NULL_HANDLE && remappedphysicalDevice == VK_NULL_HANDLE)
+    {
+        return VK_FALSE;
+    }
+    VkIcdSurfaceXlib *pSurf = (VkIcdSurfaceXlib *) m_display->get_surface();
+    m_display->get_window_handle();
+    return (m_vkFuncs.real_vkGetPhysicalDeviceXlibPresentationSupportKHR(remappedphysicalDevice, pPacket->queueFamilyIndex, pSurf->dpy, m_display->get_screen_handle()->root_visual));
+}
+#endif

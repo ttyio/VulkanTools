@@ -25,7 +25,7 @@ In a separate terminal run your app, the cube demo in this example:
 cd /home/jon/LoaderAndValidationLayers/dbuild/demos
 export VK_ICD_FILENAMES=/home/jon/LoaderAndValidationLayers/dbuild/icd/intel/intel_icd.json
 export LD_LIBRARY_PATH=/home/jon/LoaderAndValidationLayers/dbuild/loader
-VK_INSTANCE_LAYERS=Vktrace VK_DEVICE_LAYERS=Vktrace ./cube
+VK_INSTANCE_LAYERS=VK_LAYER_LUNARG_vktrace VK_DEVICE_LAYERS=VK_LAYER_LUNARG_vktrace ./cube
 ```
 
 Trace file is written into "vktrace_cube<number>.vktrace".
@@ -104,34 +104,6 @@ cd C:\\Users\developer\\Vktrace\\_out64\\Debug
 vkreplay -t vktrace_cube.vktrace
 ```
 ##Building Vktrace##
-Vktrace is built as part of top level Vulkan Cmake for project. Follow the
-build directions for the top level Vulkan project build. Vktrace binaries and
-libraries will be place in <build_dir>.
-
-###External dependencies###
-cmake
-
-###Building on Linux (make)###
-Vktrace is built as part of top level Vulkan Cmake for project. Follow the
-build directions for the top level Vulkan project build. Vktrace binaries and
-libraries will be place in <build_dir>.
-To build Vktrace project only:
-
-```
-cd vktrace
-mkdir dbuild
-cd dbuild
-cmake -DCMAKE_BUILD_TYPE=Debug  ..
-make
-```
-
-###Building on Windows###
-
-```
-cd <vktrace repo work dir>
-mkdir _out64
-cd _out64
-cmake -G "Visual Studio 12 2013 Win64" ..
-```
-// then open the solution file with Visual Studio 2013
-
+Vktrace is built as part of top level VulkanTools build. Follow the
+build directions for the top level VulkanTools project build in BUILDVT.md. Vktrace binaries and
+libraries will be placed in <build_dir>.

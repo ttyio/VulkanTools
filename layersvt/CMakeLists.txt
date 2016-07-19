@@ -11,7 +11,14 @@ endmacro()
 macro(run_vk_vtlayer_generate subcmd output)
     add_custom_command(OUTPUT ${output}
         COMMAND ${PYTHON_CMD} ${PROJECT_SOURCE_DIR}/vk-vtlayer-generate.py ${DisplayServer} ${subcmd} ${PROJECT_SOURCE_DIR}/include/vulkan/vulkan.h > ${output}
-        DEPENDS ${PROJECT_SOURCE_DIR}/vk-vtlayer-generate.py ${PROJECT_SOURCE_DIR}/include/vulkan/vulkan.h ${PROJECT_SOURCE_DIR}/vulkan.py
+        DEPENDS ${PROJECT_SOURCE_DIR}/vk-vtlayer-generate.py ${PROJECT_SOURCE_DIR}/include/vulkan/vulkan.h ${PROJECT_SOURCE_DIR}/vk_helper_api_dump.py
+    )
+endmacro()
+
+macro(run_vk_api_helper_generate subcmd)
+    add_custom_command(OUTPUT ${ARGN}
+        COMMAND ${PYTHON_CMD} ${PROJECT_SOURCE_DIR}/vk_helper_api_dump.py --${subcmd} ${PROJECT_SOURCE_DIR}/include/vulkan/vulkan.h --abs_out_dir ${CMAKE_CURRENT_BINARY_DIR}
+        DEPENDS ${PROJECT_SOURCE_DIR}/vk_helper_api_dump.py ${PROJECT_SOURCE_DIR}/vk-vtlayer-generate.py ${PROJECT_SOURCE_DIR}/include/vulkan/vulkan.h
     )
 endmacro()
 
@@ -28,14 +35,25 @@ set(CMAKE_INSTALL_RPATH ${VK_LAYER_RPATH})
 
 if (WIN32)
     if (NOT (CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_CURRENT_BINARY_DIR))
-        foreach (config_file ${LAYER_JSON_FILES})
-            FILE(TO_NATIVE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/windows/${config_file}.json src_json)
-            FILE(TO_NATIVE_PATH ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIGURATION>/${config_file}.json dst_json)
-            add_custom_target(${config_file}-json ALL
-                COMMAND copy ${src_json} ${dst_json}
-                VERBATIM
-                )
-        endforeach(config_file)
+        if (CMAKE_GENERATOR MATCHES "^Visual Studio.*")
+            foreach (config_file ${LAYER_JSON_FILES})
+                FILE(TO_NATIVE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/windows/${config_file}.json src_json)
+                FILE(TO_NATIVE_PATH ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIGURATION>/${config_file}.json dst_json)
+                add_custom_target(${config_file}-json ALL
+                    COMMAND copy ${src_json} ${dst_json}
+                    VERBATIM
+                    )
+            endforeach(config_file)
+        else()
+            foreach (config_file ${LAYER_JSON_FILES})
+                FILE(TO_NATIVE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/windows/${config_file}.json src_json)
+                FILE(TO_NATIVE_PATH ${CMAKE_CURRENT_BINARY_DIR}/${config_file}.json dst_json)
+                add_custom_target(${config_file}-json ALL
+                    COMMAND copy ${src_json} ${dst_json}
+                    VERBATIM
+                    )
+            endforeach(config_file)
+        endif()
     endif()
 else()
     # extra setup for out-of-tree builds
@@ -132,11 +150,13 @@ add_custom_target(generate_vt_helpers DEPENDS
     vk_struct_wrappers.cpp
     vk_safe_struct.h
     vk_safe_struct.cpp
+    vk_api_dump_helper_cpp.h
 )
 
 #VulkanTools layers
 run_vk_vtlayer_generate(generic generic_layer.cpp)
 run_vk_vtlayer_generate(api_dump api_dump.cpp)
+run_vk_api_helper_generate(gen_struct_wrappers vk_api_dump_helper_cpp.h)
 
 # Layer Utils Library
 # For Windows, we use a static lib because the Windows loader has a fairly restrictive loader search

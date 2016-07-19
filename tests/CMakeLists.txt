@@ -35,7 +35,7 @@ if(WIN32)
     endif()
 
 else()
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-sign-compare -std=c++11 -DMAGICKCORE_HDRI_ENABLE=0 -DMAGICKCORE_QUANTUM_DEPTH=16")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -DMAGICKCORE_HDRI_ENABLE=0 -DMAGICKCORE_QUANTUM_DEPTH=16")
 endif()
 
 set (LIBGLM_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/libs)
@@ -61,12 +61,14 @@ if (NOT WIN32)
     # extra setup for out-of-tree builds
     if (NOT (CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_CURRENT_BINARY_DIR))
         add_custom_target(binary-dir-symlinks ALL
-            COMMAND ln -sf ${CMAKE_CURRENT_SOURCE_DIR}/golden
             COMMAND ln -sf ${CMAKE_CURRENT_SOURCE_DIR}/run_all_tests.sh
-            COMMAND ln -sf ${CMAKE_CURRENT_SOURCE_DIR}/run_all_tests_with_layers.sh
-            COMMAND ln -sf ${CMAKE_CURRENT_SOURCE_DIR}/layer_test_suite.py
-            COMMAND ln -sf ${CMAKE_CURRENT_SOURCE_DIR}/vktracereplay.sh
+            COMMAND ln -sf ${CMAKE_CURRENT_SOURCE_DIR}/run_wrap_objects_tests.sh
+            COMMAND ln -sf ${CMAKE_CURRENT_SOURCE_DIR}/run_loader_tests.sh
             COMMAND ln -sf ${CMAKE_CURRENT_SOURCE_DIR}/vkvalidatelayerdoc.sh
+            # Files unique to VulkanTools go below this line
+            COMMAND ln -sf ${CMAKE_CURRENT_SOURCE_DIR}/golden
+            COMMAND ln -sf ${CMAKE_CURRENT_SOURCE_DIR}/run_all_tests_with_layers.sh
+            COMMAND ln -sf ${CMAKE_CURRENT_SOURCE_DIR}/vktracereplay.sh
             VERBATIM
             )
     endif()
@@ -93,7 +95,7 @@ if(WIN32)
    set (TEST_LIBRARIES ${GLSLANG_LIBRARIES} ${ImageMagick_LIBRARIES})
 elseif(UNIX)
    set (LIBVK "vulkan")
-   set (TEST_LIBRARIES ${GLSLANG_LIBRARIES} ${ImageMagick_LIBRARIES} ${XCB_LIBRARIES})
+   set (TEST_LIBRARIES ${GLSLANG_LIBRARIES} ${ImageMagick_LIBRARIES} ${XCB_LIBRARIES} ${X11_LIBRARIES})
 else()
 endif()
 
@@ -127,4 +129,11 @@ set_target_properties(vk_layer_validation_tests
    COMPILE_DEFINITIONS "GTEST_LINKED_AS_SHARED_LIBRARY=1")
 target_link_libraries(vk_layer_validation_tests ${LIBVK} gtest gtest_main VkLayer_utils ${TEST_LIBRARIES})
 
+add_executable(vk_loader_validation_tests loader_validation_tests.cpp ${COMMON_CPP})
+set_target_properties(vk_loader_validation_tests
+   PROPERTIES
+   COMPILE_DEFINITIONS "GTEST_LINKED_AS_SHARED_LIBRARY=1")
+target_link_libraries(vk_loader_validation_tests ${LIBVK} gtest gtest_main VkLayer_utils ${TEST_LIBRARIES})
+
 add_subdirectory(gtest-1.7.0)
+add_subdirectory(layers)

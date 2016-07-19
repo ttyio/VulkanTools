@@ -3,24 +3,17 @@
  * Copyright (c) 2015-2016 Valve Corporation
  * Copyright (c) 2015-2016 LunarG, Inc.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and/or associated documentation files (the "Materials"), to
- * deal in the Materials without restriction, including without limitation the
- * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
- * sell copies of the Materials, and to permit persons to whom the Materials are
- * furnished to do so, subject to the following conditions:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * The above copyright notice(s) and this permission notice shall be included in
- * all copies or substantial portions of the Materials.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
- *
- * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE MATERIALS OR THE
- * USE OR OTHER DEALINGS IN THE MATERIALS.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * Author: Chia-I Wu <olvaffe@gmail.com>
  * Author: Courtney Goeltzenleuchter <courtney@LunarG.com>
@@ -95,11 +88,11 @@ enum TOptions {
     EOptionDefaultDesktop = 0x1000,
 };
 
-typedef struct _SwapchainBuffers {
+struct SwapchainBuffers {
     VkImage image;
     VkCommandBuffer cmd;
     VkImageView view;
-} SwapchainBuffers;
+};
 
 class TestFrameworkVkPresent
 {
@@ -960,7 +953,7 @@ void TestFrameworkVkPresent::CreateSwapchain()
 
     VkExtent2D swapchainExtent;
     // width and height are either both -1, or both not -1.
-    if (surfCapabilities.currentExtent.width == -1)
+    if (surfCapabilities.currentExtent.width == (uint32_t)-1)
     {
         // If the surface size is undefined, the size is set to
         // the size of the images requested.
@@ -1717,7 +1710,7 @@ char **VkTestFramework::ReadFileData(const char *fileName) {
 #endif
 
     char *fdata;
-    int count = 0;
+    size_t count = 0;
     const int maxSourceStrings = 5;
     char **return_data =
         (char **)malloc(sizeof(char *) * (maxSourceStrings + 1));
@@ -1750,8 +1743,8 @@ char **VkTestFramework::ReadFileData(const char *fileName) {
     } else
         m_num_shader_strings = 1;
 
-    int len = (int)(ceil)((float)count / (float)m_num_shader_strings);
-    int ptr_len = 0, i = 0;
+    size_t len = (int)(ceil)((float)count / (float)m_num_shader_strings);
+    size_t ptr_len = 0, i = 0;
     while (count > 0) {
         return_data[i] = (char *)malloc(len + 2);
         memcpy(return_data[i], fdata + ptr_len, len);

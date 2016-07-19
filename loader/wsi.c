@@ -3,24 +3,17 @@
  * Copyright (c) 2015-2016 Valve Corporation
  * Copyright (c) 2015-2016 LunarG, Inc.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and/or associated documentation files (the "Materials"), to
- * deal in the Materials without restriction, including without limitation the
- * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
- * sell copies of the Materials, and to permit persons to whom the Materials are
- * furnished to do so, subject to the following conditions:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * The above copyright notice(s) and this permission notice shall be included in
- * all copies or substantial portions of the Materials.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
- *
- * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE MATERIALS OR THE
- * USE OR OTHER DEALINGS IN THE MATERIALS.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * Author: Ian Elliott <ian@lunarg.com>
  * Author: Jon Ashburn <jon@lunarg.com>
@@ -84,7 +77,6 @@ static const VkExtensionProperties wsi_android_surface_extension_info = {
     .specVersion = VK_KHR_ANDROID_SURFACE_REVISION,
 };
 #endif // VK_USE_PLATFORM_ANDROID_KHR
-
 
 void wsi_create_instance(struct loader_instance *ptr_instance,
                          const VkInstanceCreateInfo *pCreateInfo) {
@@ -222,7 +214,7 @@ terminator_DestroySurfaceKHR(VkInstance instance, VkSurfaceKHR surface,
                              const VkAllocationCallbacks *pAllocator) {
     struct loader_instance *ptr_instance = loader_get_instance(instance);
 
-    loader_heap_free(ptr_instance, (void *)surface);
+    loader_instance_heap_free(ptr_instance, (void *)surface);
 }
 
 /*
@@ -439,11 +431,9 @@ terminator_GetPhysicalDeviceSurfacePresentModesKHR(
  * This is the trampoline entrypoint
  * for CreateSwapchainKHR
  */
-LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL
-vkCreateSwapchainKHR(VkDevice device,
-                     const VkSwapchainCreateInfoKHR *pCreateInfo,
-                     const VkAllocationCallbacks *pAllocator,
-                     VkSwapchainKHR *pSwapchain) {
+LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(
+    VkDevice device, const VkSwapchainCreateInfoKHR *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkSwapchainKHR *pSwapchain) {
     const VkLayerDispatchTable *disp;
     disp = loader_get_dispatch(device);
     VkResult res =
@@ -515,11 +505,9 @@ vkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *pPresentInfo) {
  * This is the trampoline entrypoint
  * for CreateWin32SurfaceKHR
  */
-LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL
-vkCreateWin32SurfaceKHR(VkInstance instance,
-                        const VkWin32SurfaceCreateInfoKHR *pCreateInfo,
-                        const VkAllocationCallbacks *pAllocator,
-                        VkSurfaceKHR *pSurface) {
+LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL vkCreateWin32SurfaceKHR(
+    VkInstance instance, const VkWin32SurfaceCreateInfoKHR *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface) {
     const VkLayerInstanceDispatchTable *disp;
     disp = loader_get_instance_dispatch(instance);
     VkResult res;
@@ -533,25 +521,24 @@ vkCreateWin32SurfaceKHR(VkInstance instance,
  * This is the instance chain terminator function
  * for CreateWin32SurfaceKHR
  */
-VKAPI_ATTR VkResult VKAPI_CALL
-terminator_CreateWin32SurfaceKHR(VkInstance instance,
-                                 const VkWin32SurfaceCreateInfoKHR *pCreateInfo,
-                                 const VkAllocationCallbacks *pAllocator,
-                                 VkSurfaceKHR *pSurface) {
+VKAPI_ATTR VkResult VKAPI_CALL terminator_CreateWin32SurfaceKHR(
+    VkInstance instance, const VkWin32SurfaceCreateInfoKHR *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface) {
     // First, check to ensure the appropriate extension was enabled:
     struct loader_instance *ptr_instance = loader_get_instance(instance);
     if (!ptr_instance->wsi_win32_surface_enabled) {
         loader_log(ptr_instance, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
                    "VK_KHR_win32_surface extension not enabled.  "
                    "vkCreateWin32SurfaceKHR not executed!\n");
-        return VK_SUCCESS;
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
     }
 
     // Next, if so, proceed with the implementation of this function:
     VkIcdSurfaceWin32 *pIcdSurface = NULL;
 
-    pIcdSurface = loader_heap_alloc(ptr_instance, sizeof(VkIcdSurfaceWin32),
-                                    VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+    pIcdSurface =
+        loader_instance_heap_alloc(ptr_instance, sizeof(VkIcdSurfaceWin32),
+                                   VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
     if (pIcdSurface == NULL) {
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
@@ -594,9 +581,10 @@ terminator_GetPhysicalDeviceWin32PresentationSupportKHR(
     struct loader_instance *ptr_instance =
         (struct loader_instance *)phys_dev->this_icd->this_instance;
     if (!ptr_instance->wsi_win32_surface_enabled) {
-        loader_log(ptr_instance, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
-                   "VK_KHR_win32_surface extension not enabled.  "
-                   "vkGetPhysicalDeviceWin32PresentationSupportKHR not executed!\n");
+        loader_log(
+            ptr_instance, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
+            "VK_KHR_win32_surface extension not enabled.  "
+            "vkGetPhysicalDeviceWin32PresentationSupportKHR not executed!\n");
         return VK_SUCCESS;
     }
 
@@ -622,11 +610,9 @@ terminator_GetPhysicalDeviceWin32PresentationSupportKHR(
  * This is the trampoline entrypoint
  * for CreateMirSurfaceKHR
  */
-LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL
-vkCreateMirSurfaceKHR(VkInstance instance,
-                      const VkMirSurfaceCreateInfoKHR *pCreateInfo,
-                      const VkAllocationCallbacks *pAllocator,
-                      VkSurfaceKHR *pSurface) {
+LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL vkCreateMirSurfaceKHR(
+    VkInstance instance, const VkMirSurfaceCreateInfoKHR *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface) {
     const VkLayerInstanceDispatchTable *disp;
     disp = loader_get_instance_dispatch(instance);
     VkResult res;
@@ -640,25 +626,24 @@ vkCreateMirSurfaceKHR(VkInstance instance,
  * This is the instance chain terminator function
  * for CreateMirSurfaceKHR
  */
-VKAPI_ATTR VkResult VKAPI_CALL
-terminator_CreateMirSurfaceKHR(VkInstance instance,
-                               const VkMirSurfaceCreateInfoKHR *pCreateInfo,
-                               const VkAllocationCallbacks *pAllocator,
-                               VkSurfaceKHR *pSurface) {
+VKAPI_ATTR VkResult VKAPI_CALL terminator_CreateMirSurfaceKHR(
+    VkInstance instance, const VkMirSurfaceCreateInfoKHR *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface) {
     // First, check to ensure the appropriate extension was enabled:
     struct loader_instance *ptr_instance = loader_get_instance(instance);
     if (!ptr_instance->wsi_mir_surface_enabled) {
         loader_log(ptr_instance, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
                    "VK_KHR_mir_surface extension not enabled.  "
                    "vkCreateMirSurfaceKHR not executed!\n");
-        return VK_SUCCESS;
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
     }
 
     // Next, if so, proceed with the implementation of this function:
     VkIcdSurfaceMir *pIcdSurface = NULL;
 
-    pIcdSurface = loader_heap_alloc(ptr_instance, sizeof(VkIcdSurfaceMir),
-                                    VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+    pIcdSurface =
+        loader_instance_heap_alloc(ptr_instance, sizeof(VkIcdSurfaceMir),
+                                   VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
     if (pIcdSurface == NULL) {
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
@@ -703,9 +688,10 @@ terminator_GetPhysicalDeviceMirPresentationSupportKHR(
     struct loader_instance *ptr_instance =
         (struct loader_instance *)phys_dev->this_icd->this_instance;
     if (!ptr_instance->wsi_mir_surface_enabled) {
-        loader_log(ptr_instance, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
-                   "VK_KHR_mir_surface extension not enabled.  "
-                   "vkGetPhysicalDeviceMirPresentationSupportKHR not executed!\n");
+        loader_log(
+            ptr_instance, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
+            "VK_KHR_mir_surface extension not enabled.  "
+            "vkGetPhysicalDeviceMirPresentationSupportKHR not executed!\n");
         return VK_SUCCESS;
     }
 
@@ -758,14 +744,15 @@ VKAPI_ATTR VkResult VKAPI_CALL terminator_CreateWaylandSurfaceKHR(
         loader_log(ptr_instance, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
                    "VK_KHR_wayland_surface extension not enabled.  "
                    "vkCreateWaylandSurfaceKHR not executed!\n");
-        return VK_SUCCESS;
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
     }
 
     // Next, if so, proceed with the implementation of this function:
     VkIcdSurfaceWayland *pIcdSurface = NULL;
 
-    pIcdSurface = loader_heap_alloc(ptr_instance, sizeof(VkIcdSurfaceWayland),
-                                    VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+    pIcdSurface =
+        loader_instance_heap_alloc(ptr_instance, sizeof(VkIcdSurfaceWayland),
+                                   VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
     if (pIcdSurface == NULL) {
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
@@ -810,9 +797,10 @@ terminator_GetPhysicalDeviceWaylandPresentationSupportKHR(
     struct loader_instance *ptr_instance =
         (struct loader_instance *)phys_dev->this_icd->this_instance;
     if (!ptr_instance->wsi_wayland_surface_enabled) {
-        loader_log(ptr_instance, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
-                   "VK_KHR_wayland_surface extension not enabled.  "
-                   "vkGetPhysicalDeviceWaylandPresentationSupportKHR not executed!\n");
+        loader_log(
+            ptr_instance, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
+            "VK_KHR_wayland_surface extension not enabled.  "
+            "vkGetPhysicalDeviceWaylandPresentationSupportKHR not executed!\n");
         return VK_SUCCESS;
     }
 
@@ -838,11 +826,9 @@ terminator_GetPhysicalDeviceWaylandPresentationSupportKHR(
  * This is the trampoline entrypoint
  * for CreateXcbSurfaceKHR
  */
-LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL
-vkCreateXcbSurfaceKHR(VkInstance instance,
-                      const VkXcbSurfaceCreateInfoKHR *pCreateInfo,
-                      const VkAllocationCallbacks *pAllocator,
-                      VkSurfaceKHR *pSurface) {
+LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL vkCreateXcbSurfaceKHR(
+    VkInstance instance, const VkXcbSurfaceCreateInfoKHR *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface) {
     const VkLayerInstanceDispatchTable *disp;
     disp = loader_get_instance_dispatch(instance);
     VkResult res;
@@ -856,25 +842,24 @@ vkCreateXcbSurfaceKHR(VkInstance instance,
  * This is the instance chain terminator function
  * for CreateXcbSurfaceKHR
  */
-VKAPI_ATTR VkResult VKAPI_CALL
-terminator_CreateXcbSurfaceKHR(VkInstance instance,
-                               const VkXcbSurfaceCreateInfoKHR *pCreateInfo,
-                               const VkAllocationCallbacks *pAllocator,
-                               VkSurfaceKHR *pSurface) {
+VKAPI_ATTR VkResult VKAPI_CALL terminator_CreateXcbSurfaceKHR(
+    VkInstance instance, const VkXcbSurfaceCreateInfoKHR *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface) {
     // First, check to ensure the appropriate extension was enabled:
     struct loader_instance *ptr_instance = loader_get_instance(instance);
     if (!ptr_instance->wsi_xcb_surface_enabled) {
         loader_log(ptr_instance, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
                    "VK_KHR_xcb_surface extension not enabled.  "
                    "vkCreateXcbSurfaceKHR not executed!\n");
-        return VK_SUCCESS;
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
     }
 
     // Next, if so, proceed with the implementation of this function:
     VkIcdSurfaceXcb *pIcdSurface = NULL;
 
-    pIcdSurface = loader_heap_alloc(ptr_instance, sizeof(VkIcdSurfaceXcb),
-                                    VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+    pIcdSurface =
+        loader_instance_heap_alloc(ptr_instance, sizeof(VkIcdSurfaceXcb),
+                                   VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
     if (pIcdSurface == NULL) {
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
@@ -920,9 +905,10 @@ terminator_GetPhysicalDeviceXcbPresentationSupportKHR(
     struct loader_instance *ptr_instance =
         (struct loader_instance *)phys_dev->this_icd->this_instance;
     if (!ptr_instance->wsi_xcb_surface_enabled) {
-        loader_log(ptr_instance, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
-                   "VK_KHR_xcb_surface extension not enabled.  "
-                   "vkGetPhysicalDeviceXcbPresentationSupportKHR not executed!\n");
+        loader_log(
+            ptr_instance, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
+            "VK_KHR_xcb_surface extension not enabled.  "
+            "vkGetPhysicalDeviceXcbPresentationSupportKHR not executed!\n");
         return VK_SUCCESS;
     }
 
@@ -948,11 +934,9 @@ terminator_GetPhysicalDeviceXcbPresentationSupportKHR(
  * This is the trampoline entrypoint
  * for CreateXlibSurfaceKHR
  */
-LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL
-vkCreateXlibSurfaceKHR(VkInstance instance,
-                       const VkXlibSurfaceCreateInfoKHR *pCreateInfo,
-                       const VkAllocationCallbacks *pAllocator,
-                       VkSurfaceKHR *pSurface) {
+LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL vkCreateXlibSurfaceKHR(
+    VkInstance instance, const VkXlibSurfaceCreateInfoKHR *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface) {
     const VkLayerInstanceDispatchTable *disp;
     disp = loader_get_instance_dispatch(instance);
     VkResult res;
@@ -966,25 +950,24 @@ vkCreateXlibSurfaceKHR(VkInstance instance,
  * This is the instance chain terminator function
  * for CreateXlibSurfaceKHR
  */
-VKAPI_ATTR VkResult VKAPI_CALL
-terminator_CreateXlibSurfaceKHR(VkInstance instance,
-                                const VkXlibSurfaceCreateInfoKHR *pCreateInfo,
-                                const VkAllocationCallbacks *pAllocator,
-                                VkSurfaceKHR *pSurface) {
+VKAPI_ATTR VkResult VKAPI_CALL terminator_CreateXlibSurfaceKHR(
+    VkInstance instance, const VkXlibSurfaceCreateInfoKHR *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface) {
     // First, check to ensure the appropriate extension was enabled:
     struct loader_instance *ptr_instance = loader_get_instance(instance);
     if (!ptr_instance->wsi_xlib_surface_enabled) {
         loader_log(ptr_instance, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
                    "VK_KHR_xlib_surface extension not enabled.  "
                    "vkCreateXlibSurfaceKHR not executed!\n");
-        return VK_SUCCESS;
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
     }
 
     // Next, if so, proceed with the implementation of this function:
     VkIcdSurfaceXlib *pIcdSurface = NULL;
 
-    pIcdSurface = loader_heap_alloc(ptr_instance, sizeof(VkIcdSurfaceXlib),
-                                    VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+    pIcdSurface =
+        loader_instance_heap_alloc(ptr_instance, sizeof(VkIcdSurfaceXlib),
+                                   VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
     if (pIcdSurface == NULL) {
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
@@ -1029,9 +1012,10 @@ terminator_GetPhysicalDeviceXlibPresentationSupportKHR(
     struct loader_instance *ptr_instance =
         (struct loader_instance *)phys_dev->this_icd->this_instance;
     if (!ptr_instance->wsi_xlib_surface_enabled) {
-        loader_log(ptr_instance, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
-                   "VK_KHR_xlib_surface extension not enabled.  "
-                   "vkGetPhysicalDeviceXlibPresentationSupportKHR not executed!\n");
+        loader_log(
+            ptr_instance, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
+            "VK_KHR_xlib_surface extension not enabled.  "
+            "vkGetPhysicalDeviceXlibPresentationSupportKHR not executed!\n");
         return VK_SUCCESS;
     }
 
@@ -1057,10 +1041,9 @@ terminator_GetPhysicalDeviceXlibPresentationSupportKHR(
  * This is the trampoline entrypoint
  * for CreateAndroidSurfaceKHR
  */
-LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL
-vkCreateAndroidSurfaceKHR(VkInstance instance, ANativeWindow *window,
-                          const VkAllocationCallbacks *pAllocator,
-                          VkSurfaceKHR *pSurface) {
+LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL vkCreateAndroidSurfaceKHR(
+    VkInstance instance, ANativeWindow *window,
+    const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface) {
     const VkLayerInstanceDispatchTable *disp;
     disp = loader_get_instance_dispatch(instance);
     VkResult res;
@@ -1073,24 +1056,24 @@ vkCreateAndroidSurfaceKHR(VkInstance instance, ANativeWindow *window,
  * This is the instance chain terminator function
  * for CreateAndroidSurfaceKHR
  */
-VKAPI_ATTR VkResult VKAPI_CALL
-terminator_CreateAndroidSurfaceKHR(VkInstance instance, Window window,
-                                   const VkAllocationCallbacks *pAllocator,
-                                   VkSurfaceKHR *pSurface) {
+VKAPI_ATTR VkResult VKAPI_CALL terminator_CreateAndroidSurfaceKHR(
+    VkInstance instance, Window window, const VkAllocationCallbacks *pAllocator,
+    VkSurfaceKHR *pSurface) {
     // First, check to ensure the appropriate extension was enabled:
     struct loader_instance *ptr_instance = loader_get_instance(instance);
     if (!ptr_instance->wsi_display_enabled) {
         loader_log(ptr_instance, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
                    "VK_KHR_display extension not enabled.  "
                    "vkCreateAndroidSurfaceKHR not executed!\n");
-        return VK_SUCCESS;
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
     }
 
     // Next, if so, proceed with the implementation of this function:
     VkIcdSurfaceAndroid *pIcdSurface = NULL;
 
-    pIcdSurface = loader_heap_alloc(ptr_instance, sizeof(VkIcdSurfaceAndroid),
-                                    VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+    pIcdSurface =
+        loader_instance_heap_alloc(ptr_instance, sizeof(VkIcdSurfaceAndroid),
+                                   VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
     if (pIcdSurface == NULL) {
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
@@ -1106,16 +1089,13 @@ terminator_CreateAndroidSurfaceKHR(VkInstance instance, Window window,
 
 #endif // VK_USE_PLATFORM_ANDROID_KHR
 
-
 /*
  * Functions for the VK_KHR_display instance extension:
  */
 LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL
-vkGetPhysicalDeviceDisplayPropertiesKHR(
-    VkPhysicalDevice                            physicalDevice,
-    uint32_t*                                   pPropertyCount,
-    VkDisplayPropertiesKHR*                     pProperties)
-{
+vkGetPhysicalDeviceDisplayPropertiesKHR(VkPhysicalDevice physicalDevice,
+                                        uint32_t *pPropertyCount,
+                                        VkDisplayPropertiesKHR *pProperties) {
     VkPhysicalDevice unwrapped_phys_dev =
         loader_unwrap_physical_device(physicalDevice);
     const VkLayerInstanceDispatchTable *disp;
@@ -1125,12 +1105,9 @@ vkGetPhysicalDeviceDisplayPropertiesKHR(
     return res;
 }
 
-VKAPI_ATTR VkResult VKAPI_CALL
-terminator_GetPhysicalDeviceDisplayPropertiesKHR(
-    VkPhysicalDevice                            physicalDevice,
-    uint32_t*                                   pPropertyCount,
-    VkDisplayPropertiesKHR*                     pProperties)
-{
+VKAPI_ATTR VkResult VKAPI_CALL terminator_GetPhysicalDeviceDisplayPropertiesKHR(
+    VkPhysicalDevice physicalDevice, uint32_t *pPropertyCount,
+    VkDisplayPropertiesKHR *pProperties) {
     // First, check to ensure the appropriate extension was enabled:
     struct loader_physical_device *phys_dev =
         (struct loader_physical_device *)physicalDevice;
@@ -1146,9 +1123,8 @@ terminator_GetPhysicalDeviceDisplayPropertiesKHR(
     // Next, if so, proceed with the implementation of this function:
     struct loader_icd *icd = phys_dev->this_icd;
 
-    assert(
-        icd->GetPhysicalDeviceDisplayPropertiesKHR &&
-        "loader: null GetPhysicalDeviceDisplayPropertiesKHR ICD pointer");
+    assert(icd->GetPhysicalDeviceDisplayPropertiesKHR &&
+           "loader: null GetPhysicalDeviceDisplayPropertiesKHR ICD pointer");
 
     return icd->GetPhysicalDeviceDisplayPropertiesKHR(
         phys_dev->phys_dev, pPropertyCount, pProperties);
@@ -1156,10 +1132,8 @@ terminator_GetPhysicalDeviceDisplayPropertiesKHR(
 
 LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL
 vkGetPhysicalDeviceDisplayPlanePropertiesKHR(
-    VkPhysicalDevice                            physicalDevice,
-    uint32_t*                                   pPropertyCount,
-    VkDisplayPlanePropertiesKHR*                pProperties)
-{
+    VkPhysicalDevice physicalDevice, uint32_t *pPropertyCount,
+    VkDisplayPlanePropertiesKHR *pProperties) {
     VkPhysicalDevice unwrapped_phys_dev =
         loader_unwrap_physical_device(physicalDevice);
     const VkLayerInstanceDispatchTable *disp;
@@ -1171,19 +1145,18 @@ vkGetPhysicalDeviceDisplayPlanePropertiesKHR(
 
 VKAPI_ATTR VkResult VKAPI_CALL
 terminator_GetPhysicalDeviceDisplayPlanePropertiesKHR(
-    VkPhysicalDevice                            physicalDevice,
-    uint32_t*                                   pPropertyCount,
-    VkDisplayPlanePropertiesKHR*                pProperties)
-{
+    VkPhysicalDevice physicalDevice, uint32_t *pPropertyCount,
+    VkDisplayPlanePropertiesKHR *pProperties) {
     // First, check to ensure the appropriate extension was enabled:
     struct loader_physical_device *phys_dev =
         (struct loader_physical_device *)physicalDevice;
     struct loader_instance *ptr_instance =
         (struct loader_instance *)phys_dev->this_icd->this_instance;
     if (!ptr_instance->wsi_display_enabled) {
-        loader_log(ptr_instance, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
-                   "VK_KHR_display extension not enabled.  "
-                   "vkGetPhysicalDeviceDisplayPlanePropertiesKHR not executed!\n");
+        loader_log(
+            ptr_instance, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
+            "VK_KHR_display extension not enabled.  "
+            "vkGetPhysicalDeviceDisplayPlanePropertiesKHR not executed!\n");
         return VK_SUCCESS;
     }
 
@@ -1199,12 +1172,10 @@ terminator_GetPhysicalDeviceDisplayPlanePropertiesKHR(
 }
 
 LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL
-vkGetDisplayPlaneSupportedDisplaysKHR(
-    VkPhysicalDevice                            physicalDevice,
-    uint32_t                                    planeIndex,
-    uint32_t*                                   pDisplayCount,
-    VkDisplayKHR*                               pDisplays)
-{
+vkGetDisplayPlaneSupportedDisplaysKHR(VkPhysicalDevice physicalDevice,
+                                      uint32_t planeIndex,
+                                      uint32_t *pDisplayCount,
+                                      VkDisplayKHR *pDisplays) {
     VkPhysicalDevice unwrapped_phys_dev =
         loader_unwrap_physical_device(physicalDevice);
     const VkLayerInstanceDispatchTable *disp;
@@ -1215,12 +1186,10 @@ vkGetDisplayPlaneSupportedDisplaysKHR(
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
-terminator_GetDisplayPlaneSupportedDisplaysKHR(
-    VkPhysicalDevice                            physicalDevice,
-    uint32_t                                    planeIndex,
-    uint32_t*                                   pDisplayCount,
-    VkDisplayKHR*                               pDisplays)
-{
+terminator_GetDisplayPlaneSupportedDisplaysKHR(VkPhysicalDevice physicalDevice,
+                                               uint32_t planeIndex,
+                                               uint32_t *pDisplayCount,
+                                               VkDisplayKHR *pDisplays) {
     // First, check to ensure the appropriate extension was enabled:
     struct loader_physical_device *phys_dev =
         (struct loader_physical_device *)physicalDevice;
@@ -1236,21 +1205,17 @@ terminator_GetDisplayPlaneSupportedDisplaysKHR(
     // Next, if so, proceed with the implementation of this function:
     struct loader_icd *icd = phys_dev->this_icd;
 
-    assert(
-        icd->GetDisplayPlaneSupportedDisplaysKHR &&
-        "loader: null GetDisplayPlaneSupportedDisplaysKHR ICD pointer");
+    assert(icd->GetDisplayPlaneSupportedDisplaysKHR &&
+           "loader: null GetDisplayPlaneSupportedDisplaysKHR ICD pointer");
 
     return icd->GetDisplayPlaneSupportedDisplaysKHR(
         phys_dev->phys_dev, planeIndex, pDisplayCount, pDisplays);
 }
 
 LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL
-vkGetDisplayModePropertiesKHR(
-    VkPhysicalDevice                            physicalDevice,
-    VkDisplayKHR                                display,
-    uint32_t*                                   pPropertyCount,
-    VkDisplayModePropertiesKHR*                 pProperties)
-{
+vkGetDisplayModePropertiesKHR(VkPhysicalDevice physicalDevice,
+                              VkDisplayKHR display, uint32_t *pPropertyCount,
+                              VkDisplayModePropertiesKHR *pProperties) {
     VkPhysicalDevice unwrapped_phys_dev =
         loader_unwrap_physical_device(physicalDevice);
     const VkLayerInstanceDispatchTable *disp;
@@ -1260,13 +1225,9 @@ vkGetDisplayModePropertiesKHR(
     return res;
 }
 
-VKAPI_ATTR VkResult VKAPI_CALL
-terminator_GetDisplayModePropertiesKHR(
-    VkPhysicalDevice                            physicalDevice,
-    VkDisplayKHR                                display,
-    uint32_t*                                   pPropertyCount,
-    VkDisplayModePropertiesKHR*                 pProperties)
-{
+VKAPI_ATTR VkResult VKAPI_CALL terminator_GetDisplayModePropertiesKHR(
+    VkPhysicalDevice physicalDevice, VkDisplayKHR display,
+    uint32_t *pPropertyCount, VkDisplayModePropertiesKHR *pProperties) {
     // First, check to ensure the appropriate extension was enabled:
     struct loader_physical_device *phys_dev =
         (struct loader_physical_device *)physicalDevice;
@@ -1282,39 +1243,30 @@ terminator_GetDisplayModePropertiesKHR(
     // Next, if so, proceed with the implementation of this function:
     struct loader_icd *icd = phys_dev->this_icd;
 
-    assert(
-        icd->GetDisplayModePropertiesKHR &&
-        "loader: null GetDisplayModePropertiesKHR ICD pointer");
+    assert(icd->GetDisplayModePropertiesKHR &&
+           "loader: null GetDisplayModePropertiesKHR ICD pointer");
 
-    return icd->GetDisplayModePropertiesKHR(
-        phys_dev->phys_dev, display, pPropertyCount, pProperties);
+    return icd->GetDisplayModePropertiesKHR(phys_dev->phys_dev, display,
+                                            pPropertyCount, pProperties);
 }
 
-LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL
-vkCreateDisplayModeKHR(
-    VkPhysicalDevice                            physicalDevice,
-    VkDisplayKHR                                display,
-    const VkDisplayModeCreateInfoKHR*           pCreateInfo,
-    const VkAllocationCallbacks*                pAllocator,
-    VkDisplayModeKHR*                           pMode)
-{
+LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL vkCreateDisplayModeKHR(
+    VkPhysicalDevice physicalDevice, VkDisplayKHR display,
+    const VkDisplayModeCreateInfoKHR *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkDisplayModeKHR *pMode) {
     VkPhysicalDevice unwrapped_phys_dev =
         loader_unwrap_physical_device(physicalDevice);
     const VkLayerInstanceDispatchTable *disp;
     disp = loader_get_instance_dispatch(physicalDevice);
-    VkResult res = disp->CreateDisplayModeKHR(
-        unwrapped_phys_dev, display, pCreateInfo, pAllocator, pMode);
+    VkResult res = disp->CreateDisplayModeKHR(unwrapped_phys_dev, display,
+                                              pCreateInfo, pAllocator, pMode);
     return res;
 }
 
-VKAPI_ATTR VkResult VKAPI_CALL
-terminator_CreateDisplayModeKHR(
-    VkPhysicalDevice                            physicalDevice,
-    VkDisplayKHR                                display,
-    const VkDisplayModeCreateInfoKHR*           pCreateInfo,
-    const VkAllocationCallbacks*                pAllocator,
-    VkDisplayModeKHR*                           pMode)
-{
+VKAPI_ATTR VkResult VKAPI_CALL terminator_CreateDisplayModeKHR(
+    VkPhysicalDevice physicalDevice, VkDisplayKHR display,
+    const VkDisplayModeCreateInfoKHR *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkDisplayModeKHR *pMode) {
     // First, check to ensure the appropriate extension was enabled:
     struct loader_physical_device *phys_dev =
         (struct loader_physical_device *)physicalDevice;
@@ -1324,27 +1276,23 @@ terminator_CreateDisplayModeKHR(
         loader_log(ptr_instance, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
                    "VK_KHR_display extension not enabled.  "
                    "vkCreateDisplayModeKHR not executed!\n");
-        return VK_SUCCESS;
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
     }
 
     // Next, if so, proceed with the implementation of this function:
     struct loader_icd *icd = phys_dev->this_icd;
 
-    assert(
-        icd->CreateDisplayModeKHR &&
-        "loader: null CreateDisplayModeKHR ICD pointer");
+    assert(icd->CreateDisplayModeKHR &&
+           "loader: null CreateDisplayModeKHR ICD pointer");
 
-    return icd->CreateDisplayModeKHR(
-        phys_dev->phys_dev, display, pCreateInfo, pAllocator, pMode);
+    return icd->CreateDisplayModeKHR(phys_dev->phys_dev, display, pCreateInfo,
+                                     pAllocator, pMode);
 }
 
 LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL
-vkGetDisplayPlaneCapabilitiesKHR(
-    VkPhysicalDevice                            physicalDevice,
-    VkDisplayModeKHR                            mode,
-    uint32_t                                    planeIndex,
-    VkDisplayPlaneCapabilitiesKHR*              pCapabilities)
-{
+vkGetDisplayPlaneCapabilitiesKHR(VkPhysicalDevice physicalDevice,
+                                 VkDisplayModeKHR mode, uint32_t planeIndex,
+                                 VkDisplayPlaneCapabilitiesKHR *pCapabilities) {
     VkPhysicalDevice unwrapped_phys_dev =
         loader_unwrap_physical_device(physicalDevice);
     const VkLayerInstanceDispatchTable *disp;
@@ -1354,13 +1302,9 @@ vkGetDisplayPlaneCapabilitiesKHR(
     return res;
 }
 
-VKAPI_ATTR VkResult VKAPI_CALL
-terminator_GetDisplayPlaneCapabilitiesKHR(
-    VkPhysicalDevice                            physicalDevice,
-    VkDisplayModeKHR                            mode,
-    uint32_t                                    planeIndex,
-    VkDisplayPlaneCapabilitiesKHR*              pCapabilities)
-{
+VKAPI_ATTR VkResult VKAPI_CALL terminator_GetDisplayPlaneCapabilitiesKHR(
+    VkPhysicalDevice physicalDevice, VkDisplayModeKHR mode, uint32_t planeIndex,
+    VkDisplayPlaneCapabilitiesKHR *pCapabilities) {
     // First, check to ensure the appropriate extension was enabled:
     struct loader_physical_device *phys_dev =
         (struct loader_physical_device *)physicalDevice;
@@ -1376,21 +1320,16 @@ terminator_GetDisplayPlaneCapabilitiesKHR(
     // Next, if so, proceed with the implementation of this function:
     struct loader_icd *icd = phys_dev->this_icd;
 
-    assert(
-        icd->GetDisplayPlaneCapabilitiesKHR &&
-        "loader: null GetDisplayPlaneCapabilitiesKHR ICD pointer");
+    assert(icd->GetDisplayPlaneCapabilitiesKHR &&
+           "loader: null GetDisplayPlaneCapabilitiesKHR ICD pointer");
 
-    return icd->GetDisplayPlaneCapabilitiesKHR(
-        phys_dev->phys_dev, mode, planeIndex, pCapabilities);
+    return icd->GetDisplayPlaneCapabilitiesKHR(phys_dev->phys_dev, mode,
+                                               planeIndex, pCapabilities);
 }
 
-LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL
-vkCreateDisplayPlaneSurfaceKHR(
-    VkInstance                                  instance,
-    const VkDisplaySurfaceCreateInfoKHR*        pCreateInfo,
-    const VkAllocationCallbacks*                pAllocator,
-    VkSurfaceKHR*                               pSurface)
-{
+LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL vkCreateDisplayPlaneSurfaceKHR(
+    VkInstance instance, const VkDisplaySurfaceCreateInfoKHR *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface) {
     const VkLayerInstanceDispatchTable *disp;
     disp = loader_get_instance_dispatch(instance);
     VkResult res;
@@ -1400,18 +1339,21 @@ vkCreateDisplayPlaneSurfaceKHR(
     return res;
 }
 
-VKAPI_ATTR VkResult VKAPI_CALL
-terminator_CreateDisplayPlaneSurfaceKHR(
-    VkInstance                                  instance,
-    const VkDisplaySurfaceCreateInfoKHR*        pCreateInfo,
-    const VkAllocationCallbacks*                pAllocator,
-    VkSurfaceKHR*                               pSurface)
-{
+VKAPI_ATTR VkResult VKAPI_CALL terminator_CreateDisplayPlaneSurfaceKHR(
+    VkInstance instance, const VkDisplaySurfaceCreateInfoKHR *pCreateInfo,
+    const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface) {
     struct loader_instance *inst = loader_get_instance(instance);
     VkIcdSurfaceDisplay *pIcdSurface = NULL;
 
-    pIcdSurface = loader_heap_alloc(inst, sizeof(VkIcdSurfaceDisplay),
-                                    VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+    if (!inst->wsi_surface_enabled) {
+        loader_log(inst, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
+                   "VK_KHR_surface extension not enabled.  "
+                   "vkCreateDisplayPlaneSurfaceKHR not executed!\n");
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
+    }
+
+    pIcdSurface = loader_instance_heap_alloc(
+        inst, sizeof(VkIcdSurfaceDisplay), VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
     if (pIcdSurface == NULL) {
         return VK_ERROR_OUT_OF_HOST_MEMORY;
     }

@@ -4,24 +4,17 @@
  * Copyright (c) 2015-2016 LunarG, Inc.
  * Copyright (c) 2015-2016 Google, Inc.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and/or associated documentation files (the "Materials"), to
- * deal in the Materials without restriction, including without limitation the
- * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
- * sell copies of the Materials, and to permit persons to whom the Materials are
- * furnished to do so, subject to the following conditions:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * The above copyright notice(s) and this permission notice shall be included in
- * all copies or substantial portions of the Materials.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THE MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
- *
- * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
- * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
- * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE MATERIALS OR THE
- * USE OR OTHER DEALINGS IN THE MATERIALS.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * Author: Courtney Goeltzenleuchter <courtney@LunarG.com>
  * Author: Tony Barbour <tony@LunarG.com>
@@ -36,6 +29,22 @@
             (PFN_vk##entrypoint)vkGetDeviceProcAddr(dev, "vk" #entrypoint);    \
         assert(fp##entrypoint != NULL);                                        \
     }
+
+//Return true if format contains depth and stencil information
+bool vk_format_is_depth_and_stencil(VkFormat format) {
+    bool is_ds = false;
+
+    switch (format) {
+    case VK_FORMAT_D16_UNORM_S8_UINT:
+    case VK_FORMAT_D24_UNORM_S8_UINT:
+    case VK_FORMAT_D32_SFLOAT_S8_UINT:
+        is_ds = true;
+        break;
+    default:
+        break;
+    }
+    return is_ds;
+}
 
 VkRenderFramework::VkRenderFramework()
     : inst(VK_NULL_HANDLE), m_device(NULL), m_commandPool(VK_NULL_HANDLE),
@@ -404,7 +413,7 @@ VkDeviceObj::VkDeviceObj(uint32_t id, VkPhysicalDevice obj)
     init();
 
     props = phy().properties();
-    queue_props = phy().queue_properties().data();
+    queue_props = phy().queue_properties();
 }
 
 VkDeviceObj::VkDeviceObj(uint32_t id, VkPhysicalDevice obj,
@@ -414,7 +423,7 @@ VkDeviceObj::VkDeviceObj(uint32_t id, VkPhysicalDevice obj,
     init(layer_names, extension_names);
 
     props = phy().properties();
-    queue_props = phy().queue_properties().data();
+    queue_props = phy().queue_properties();
 }
 
 void VkDeviceObj::get_device_queue() {
@@ -433,10 +442,15 @@ VkDescriptorSetObj::~VkDescriptorSetObj() {
 
 int VkDescriptorSetObj::AppendDummy() {
     /* request a descriptor but do not update it */
-    VkDescriptorPoolSize tc = {};
-    tc.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    tc.descriptorCount = 1;
-    m_type_counts.push_back(tc);
+    VkDescriptorSetLayoutBinding binding = {};
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    binding.descriptorCount = 1;
+    binding.binding = m_layout_bindings.size();
+    binding.stageFlags = VK_SHADER_STAGE_ALL;
+    binding.pImmutableSamplers = NULL;
+
+    m_layout_bindings.push_back(binding);
+    m_type_counts[VK_DESCRIPTOR_TYPE_STORAGE_BUFFER] += binding.descriptorCount;
 
     return m_nextSlot++;
 }
@@ -447,10 +461,15 @@ int VkDescriptorSetObj::AppendBuffer(VkDescriptorType type,
            type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC ||
            type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER ||
            type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC);
-    VkDescriptorPoolSize tc = {};
-    tc.type = type;
-    tc.descriptorCount = 1;
-    m_type_counts.push_back(tc);
+    VkDescriptorSetLayoutBinding binding = {};
+    binding.descriptorType = type;
+    binding.descriptorCount = 1;
+    binding.binding = m_layout_bindings.size();
+    binding.stageFlags = VK_SHADER_STAGE_ALL;
+    binding.pImmutableSamplers = NULL;
+
+    m_layout_bindings.push_back(binding);
+    m_type_counts[type] += binding.descriptorCount;
 
     m_writes.push_back(vk_testing::Device::write_descriptor_set(
         vk_testing::DescriptorSet(), m_nextSlot, 0, type, 1,
@@ -461,11 +480,16 @@ int VkDescriptorSetObj::AppendBuffer(VkDescriptorType type,
 
 int VkDescriptorSetObj::AppendSamplerTexture(VkSamplerObj *sampler,
                                              VkTextureObj *texture) {
-    VkDescriptorPoolSize tc = {};
-    tc.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    tc.descriptorCount = 1;
-    m_type_counts.push_back(tc);
+    VkDescriptorSetLayoutBinding binding = {};
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.binding = m_layout_bindings.size();
+    binding.stageFlags = VK_SHADER_STAGE_ALL;
+    binding.pImmutableSamplers = NULL;
 
+    m_layout_bindings.push_back(binding);
+    m_type_counts[VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER] +=
+        binding.descriptorCount;
     VkDescriptorImageInfo tmp = texture->m_imageInfo;
     tmp.sampler = sampler->handle();
     m_imageSamplerDescriptors.push_back(tmp);
@@ -490,30 +514,26 @@ void VkDescriptorSetObj::CreateVKDescriptorSet(
 
     if ( m_type_counts.size()) {
         // create VkDescriptorPool
+        VkDescriptorPoolSize poolSize;
+        vector<VkDescriptorPoolSize> sizes;
+        for (auto it = m_type_counts.begin(); it != m_type_counts.end(); ++it) {
+            poolSize.descriptorCount = it->second;
+            poolSize.type = it->first;
+            sizes.push_back(poolSize);
+        }
         VkDescriptorPoolCreateInfo pool = {};
         pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        pool.poolSizeCount = m_type_counts.size();
+        pool.poolSizeCount = sizes.size();
         pool.maxSets = 1;
-        pool.pPoolSizes = m_type_counts.data();
+        pool.pPoolSizes = sizes.data();
         init(*m_device, pool);
-    }
-
-    // create VkDescriptorSetLayout
-    vector<VkDescriptorSetLayoutBinding> bindings;
-    bindings.resize(m_type_counts.size());
-    for (size_t i = 0; i < m_type_counts.size(); i++) {
-        bindings[i].binding = i;
-        bindings[i].descriptorType = m_type_counts[i].type;
-        bindings[i].descriptorCount = m_type_counts[i].descriptorCount;
-        bindings[i].stageFlags = VK_SHADER_STAGE_ALL;
-        bindings[i].pImmutableSamplers = NULL;
     }
 
     // create VkDescriptorSetLayout
     VkDescriptorSetLayoutCreateInfo layout = {};
     layout.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layout.bindingCount = bindings.size();
-    layout.pBindings = bindings.data();
+    layout.bindingCount = m_layout_bindings.size();
+    layout.pBindings = m_layout_bindings.data();
 
     m_layout.init(*m_device, layout);
     vector<const vk_testing::DescriptorSetLayout *> layouts;
@@ -587,7 +607,7 @@ void VkImageObj::ImageMemoryBarrier(VkCommandBufferObj *cmd_buf,
 }
 
 void VkImageObj::SetLayout(VkCommandBufferObj *cmd_buf,
-                           VkImageAspectFlagBits aspect,
+                           VkImageAspectFlags aspect,
                            VkImageLayout image_layout) {
     VkFlags src_mask, dst_mask;
     const VkFlags all_cache_outputs =
@@ -657,11 +677,14 @@ void VkImageObj::SetLayout(VkCommandBufferObj *cmd_buf,
         break;
     }
 
+    if (m_descriptorImageInfo.imageLayout == VK_IMAGE_LAYOUT_UNDEFINED)
+        src_mask = 0;
+
     ImageMemoryBarrier(cmd_buf, aspect, src_mask, dst_mask, image_layout);
     m_descriptorImageInfo.imageLayout = image_layout;
 }
 
-void VkImageObj::SetLayout(VkImageAspectFlagBits aspect,
+void VkImageObj::SetLayout(VkImageAspectFlags aspect,
                            VkImageLayout image_layout) {
     VkResult U_ASSERT_ONLY err;
 
@@ -815,7 +838,8 @@ VkTextureObj::VkTextureObj(VkDeviceObj *device, uint32_t *colors)
     void *data;
     uint32_t x, y;
     VkImageObj stagingImage(device);
-    VkMemoryPropertyFlags reqs = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+    VkMemoryPropertyFlags reqs = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 
     stagingImage.init(16, 16, tex_format, VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                                               VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
@@ -895,11 +919,18 @@ VkSamplerObj::VkSamplerObj(VkDeviceObj *device) {
  * Basic ConstantBuffer constructor. Then use create methods to fill in the
  * details.
  */
-VkConstantBufferObj::VkConstantBufferObj(VkDeviceObj *device) {
+VkConstantBufferObj::VkConstantBufferObj(VkDeviceObj *device,
+                                         VkBufferUsageFlags usage) {
     m_device = device;
     m_commandBuffer = 0;
 
     memset(&m_descriptorBufferInfo, 0, sizeof(m_descriptorBufferInfo));
+
+    // Special case for usages outside of original limits of framework
+    if ((VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT) !=
+            usage) {
+        init_no_mem(*m_device, create_info(0, usage));
+    }
 }
 
 VkConstantBufferObj::~VkConstantBufferObj() {
@@ -912,7 +943,8 @@ VkConstantBufferObj::~VkConstantBufferObj() {
 }
 
 VkConstantBufferObj::VkConstantBufferObj(VkDeviceObj *device, int constantCount,
-                                         int constantSize, const void *data) {
+                                         int constantSize, const void *data,
+                                         VkBufferUsageFlags usage) {
     m_device = device;
     m_commandBuffer = 0;
 
@@ -920,12 +952,20 @@ VkConstantBufferObj::VkConstantBufferObj(VkDeviceObj *device, int constantCount,
     m_numVertices = constantCount;
     m_stride = constantSize;
 
-    VkMemoryPropertyFlags reqs = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
-    const size_t allocationSize = constantCount * constantSize;
-    init_as_src_and_dst(*m_device, allocationSize, reqs);
+    VkMemoryPropertyFlags reqs = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    const VkDeviceSize allocationSize =
+            static_cast<VkDeviceSize>(constantCount * constantSize);
+
+    if ((VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT) ==
+            usage) {
+        init_as_src_and_dst(*m_device, allocationSize, reqs);
+    } else {
+        init(*m_device, create_info(allocationSize, usage), reqs);
+    }
 
     void *pData = memory().map();
-    memcpy(pData, data, allocationSize);
+    memcpy(pData, data, static_cast<size_t>(allocationSize));
     memory().unmap();
 
     /*
@@ -1050,7 +1090,8 @@ void VkIndexBufferObj::CreateAndInitBuffer(int numIndexes,
     }
 
     const size_t allocationSize = numIndexes * m_stride;
-    VkMemoryPropertyFlags reqs = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+    VkMemoryPropertyFlags reqs = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
     init_as_src_and_dst(*m_device, allocationSize, reqs);
 
     void *pData = memory().map();
@@ -1128,6 +1169,7 @@ VkPipelineObj::VkPipelineObj(VkDeviceObj *device) {
     m_device = device;
 
     m_vi_state.pNext = VK_NULL_HANDLE;
+    m_vi_state.flags = 0;
     m_vi_state.vertexBindingDescriptionCount = 0;
     m_vi_state.pVertexBindingDescriptions = VK_NULL_HANDLE;
     m_vi_state.vertexAttributeDescriptionCount = 0;
@@ -1138,12 +1180,14 @@ VkPipelineObj::VkPipelineObj(VkDeviceObj *device) {
     m_ia_state.sType =
         VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     m_ia_state.pNext = VK_NULL_HANDLE;
+    m_ia_state.flags = 0;
     m_ia_state.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     m_ia_state.primitiveRestartEnable = VK_FALSE;
 
     m_rs_state.sType =
         VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     m_rs_state.pNext = VK_NULL_HANDLE;
+    m_rs_state.flags = 0;
     m_rs_state.depthClampEnable = VK_TRUE;
     m_rs_state.rasterizerDiscardEnable = VK_FALSE;
     m_rs_state.polygonMode = VK_POLYGON_MODE_FILL;
@@ -1166,6 +1210,7 @@ VkPipelineObj::VkPipelineObj(VkDeviceObj *device) {
 
     m_ms_state.pNext = VK_NULL_HANDLE;
     m_ms_state.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    m_ms_state.flags = 0;
     m_ms_state.pSampleMask = NULL;
     m_ms_state.alphaToCoverageEnable = VK_FALSE;
     m_ms_state.alphaToOneEnable = VK_FALSE;
@@ -1175,6 +1220,7 @@ VkPipelineObj::VkPipelineObj(VkDeviceObj *device) {
 
     m_vp_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
     m_vp_state.pNext = VK_NULL_HANDLE;
+    m_vp_state.flags = 0;
     m_vp_state.viewportCount = 1;
     m_vp_state.scissorCount = 1;
     m_vp_state.pViewports = NULL;
@@ -1183,6 +1229,7 @@ VkPipelineObj::VkPipelineObj(VkDeviceObj *device) {
     m_ds_state.sType =
         VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     m_ds_state.pNext = VK_NULL_HANDLE, m_ds_state.depthTestEnable = VK_FALSE;
+    m_ds_state.flags = 0;
     m_ds_state.depthWriteEnable = VK_FALSE;
     m_ds_state.depthBoundsTestEnable = VK_FALSE;
     m_ds_state.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
@@ -1205,13 +1252,13 @@ void VkPipelineObj::AddShader(VkShaderObj *shader) {
 }
 
 void VkPipelineObj::AddVertexInputAttribs(
-    VkVertexInputAttributeDescription *vi_attrib, int count) {
+    VkVertexInputAttributeDescription *vi_attrib, uint32_t count) {
     m_vi_state.pVertexAttributeDescriptions = vi_attrib;
     m_vi_state.vertexAttributeDescriptionCount = count;
 }
 
-void VkPipelineObj::AddVertexInputBindings(
-    VkVertexInputBindingDescription *vi_binding, int count) {
+void VkPipelineObj::AddVertexInputBindings(VkVertexInputBindingDescription *vi_binding,
+                                           uint32_t count) {
     m_vi_state.pVertexBindingDescriptions = vi_binding;
     m_vi_state.vertexBindingDescriptionCount = count;
 }
@@ -1300,6 +1347,9 @@ VkResult VkPipelineObj::CreateVKPipeline(VkPipelineLayout layout,
     m_vi_state.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     info.pVertexInputState = &m_vi_state;
 
+    m_ia_state.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    info.pInputAssemblyState = &m_ia_state;
+
     info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     info.pNext = NULL;
     info.flags = 0;
@@ -1331,7 +1381,6 @@ VkResult VkPipelineObj::CreateVKPipeline(VkPipelineLayout layout,
 
     info.renderPass = render_pass;
     info.subpass = 0;
-    info.pInputAssemblyState = &m_ia_state;
     info.pViewportState = &m_vp_state;
     info.pRasterizationState = &m_rs_state;
     info.pMultisampleState = &m_ms_state;
@@ -1471,7 +1520,7 @@ void VkCommandBufferObj::FillBuffer(VkBuffer buffer, VkDeviceSize offset,
 
 void VkCommandBufferObj::UpdateBuffer(VkBuffer buffer, VkDeviceSize dstOffset,
                                       VkDeviceSize dataSize,
-                                      const uint32_t *pData) {
+                                      const void *pData) {
     vkCmdUpdateBuffer(handle(), buffer, dstOffset, dataSize, pData);
 }
 
@@ -1606,12 +1655,12 @@ void VkCommandBufferObj::Draw(uint32_t vertexCount, uint32_t instanceCount,
     vkCmdDraw(handle(), vertexCount, instanceCount, firstVertex, firstInstance);
 }
 
-void VkCommandBufferObj::QueueCommandBuffer() {
+void VkCommandBufferObj::QueueCommandBuffer(bool checkSuccess) {
     VkFence nullFence = {VK_NULL_HANDLE};
-    QueueCommandBuffer(nullFence);
+    QueueCommandBuffer(nullFence, checkSuccess);
 }
 
-void VkCommandBufferObj::QueueCommandBuffer(VkFence fence) {
+void VkCommandBufferObj::QueueCommandBuffer(VkFence fence, bool checkSuccess) {
     VkResult err = VK_SUCCESS;
 
     // submit the command buffer to the universal queue
@@ -1627,10 +1676,14 @@ void VkCommandBufferObj::QueueCommandBuffer(VkFence fence) {
     submit_info.pSignalSemaphores = NULL;
 
     err = vkQueueSubmit(m_device->m_queue, 1, &submit_info, fence);
-    ASSERT_VK_SUCCESS(err);
+    if (checkSuccess) {
+        ASSERT_VK_SUCCESS(err);
+    }
 
     err = vkQueueWaitIdle(m_device->m_queue);
-    ASSERT_VK_SUCCESS(err);
+    if (checkSuccess) {
+        ASSERT_VK_SUCCESS(err);
+    }
 
     // Wait for work to finish before cleaning up.
     vkDeviceWaitIdle(m_device->device());
@@ -1670,7 +1723,7 @@ VkDepthStencilObj::VkDepthStencilObj(VkDeviceObj *device) : VkImageObj(device)  
 VkImageView *VkDepthStencilObj::BindInfo() { return &m_attachmentBindInfo; }
 
 void VkDepthStencilObj::Init(VkDeviceObj *device, int32_t width, int32_t height,
-                             VkFormat format) {
+                             VkFormat format, VkImageUsageFlags usage) {
 
     VkImageViewCreateInfo view_info = {};
 
@@ -1680,10 +1733,14 @@ void VkDepthStencilObj::Init(VkDeviceObj *device, int32_t width, int32_t height,
 
     /* create image */
     init(width, height, m_depth_stencil_fmt,
-         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+         usage,
          VK_IMAGE_TILING_OPTIMAL);
 
-    SetLayout(VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+    VkImageAspectFlags aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+    if (vk_format_is_depth_and_stencil(format))
+        aspect |= VK_IMAGE_ASPECT_STENCIL_BIT;
+
+    SetLayout(aspect, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
     view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     view_info.pNext = NULL;

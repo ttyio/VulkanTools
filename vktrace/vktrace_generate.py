@@ -5,23 +5,17 @@
 # Copyright (C) 2015-2016 Valve Corporation
 # Copyright (C) 2015-2016 LunarG, Inc.
 #
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# The above copyright notice and this permission notice shall be included
-# in all copies or substantial portions of the Software.
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 #
 # Author: Jon Ashburn <jon@lunarg.com>
 # Author: Tobin Ehlis <tobin@lunarg.com>
@@ -43,6 +37,12 @@ import vulkan
 headers = []
 objects = []
 protos = []
+proto_exclusions = [ 'CreateAndroidSurfaceKHR', 'CreateWaylandSurfaceKHR', 'CreateMirSurfaceKHR',
+                     'GetPhysicalDeviceWaylandPresentationSupportKHR', 'GetPhysicalDeviceMirPresentationSupportKHR',
+                     'GetPhysicalDeviceDisplayPropertiesKHR', 'GetPhysicalDeviceDisplayPlanePropertiesKHR',
+                     'GetDisplayPlaneSupportedDisplaysKHR', 'GetDisplayModePropertiesKHR',
+                     'CreateDisplayModeKHR', 'GetDisplayPlaneCapabilitiesKHR', 'CreateDisplayPlaneSurfaceKHR']
+
 for ext in vulkan.extensions_all:
     headers.extend(ext.headers)
     objects.extend(ext.objects)
@@ -85,23 +85,17 @@ class Subcommand(object):
  * Copyright (C) 2015-2016 Valve Corporation
  * Copyright (C) 2015-2016 LunarG, Inc.
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * The above copyright notice and this permission notice shall be included
- * in all copies or substantial portions of the Software.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * Author: Jon Ashburn <jon@lunarg.com>
  * Author: Tobin Ehlis <tobin@lunarg.com>
@@ -124,7 +118,7 @@ class Subcommand(object):
         func_protos.append('#endif')
         func_protos.append('// Hooked function prototypes\n')
         for proto in self.protos:
-            if 'Dbg' not in proto.name and 'CreateAndroidSurfaceKHR' not in proto.name:
+            if proto.name not in proto_exclusions:
                 func_protos.append('VKTRACER_EXPORT %s;' % proto.c_func(prefix="__HOOKED_vk", attr="VKAPI"))
 
         func_protos.append('#ifdef __cplusplus')
@@ -138,11 +132,58 @@ class Subcommand(object):
         for ext in vulkan.extensions_all:
             if (extensionName.lower() == ext.name.lower()):
                 for proto in ext.protos:
-                    if 'CreateAndroidSurfaceKHR' not in proto.name:
+                    if proto.name not in proto_exclusions:
                         func_protos.append('VKTRACER_EXPORT %s;' % proto.c_func(prefix="__HOOKED_vk", attr="VKAPI"))
 
         return "\n".join(func_protos)
 
+    # Return set of printf '%' qualifier, input to that qualifier, and any dereference
+    def _get_printf_params(self, vk_type, name, output_param):
+        deref = ""
+        # TODO : Need ENUM and STRUCT checks here
+        if "VkImageLayout" in vk_type:
+            return ("%s", "string_%s(%s)" % (vk_type.replace('const ', '').strip('*'), name), deref)
+        if "VkClearColor" in vk_type:
+            return ("%p", "(void*)&%s" % name, deref)
+        if "_type" in vk_type.lower(): # TODO : This should be generic ENUM check
+            return ("%s", "string_%s(%s)" % (vk_type.replace('const ', '').strip('*'), name), deref)
+        if "char*" == vk_type:
+            return ("%s", name, "*")
+        if "uint64_t" in vk_type:
+            if '*' in vk_type:
+                return ("%lu",  "(%s == NULL) ? 0 : *(%s)" % (name, name), "*")
+            return ("%lu", name, deref)
+        if "uint32_t" in vk_type:
+            if '*' in vk_type:
+                return ("%u",  "(%s == NULL) ? 0 : *(%s)" % (name, name), "*")
+            return ("%u", name, deref)
+        if "xcb_visualid_t" in vk_type:
+            if '*' in vk_type:
+                return ("%u",  "(%s == NULL) ? 0 : *(%s)" % (name, name), "*")
+            return ("%u", name, deref)
+        if "VkBool32" in vk_type:
+            if '*' in vk_type:
+                return ("%s",  "(*%s == VK_TRUE) ? \"VK_TRUE\" : \"VK_FALSE\"" % (name), "*")
+            return ("%s", "(%s == VK_TRUE) ? \"VK_TRUE\" : \"VK_FALSE\"" %(name), deref)
+        if "size_t" in vk_type:
+            if '*' in vk_type:
+                return ("\" VK_SIZE_T_SPECIFIER \"", "(%s == NULL) ? 0 : *(%s)" % (name, name), "*")
+            return ("\" VK_SIZE_T_SPECIFIER \"", name, deref)
+        if "float" in vk_type:
+            if '[' in vk_type: # handle array, current hard-coded to 4 (TODO: Make this dynamic)
+                return ("[%f, %f, %f, %f]", "%s[0], %s[1], %s[2], %s[3]" % (name, name, name, name), deref)
+            return ("%f", name, deref)
+        if "bool" in vk_type or 'xcb_randr_crtc_t' in vk_type:
+            return ("%u", name, deref)
+        if True in [t in vk_type.lower() for t in ["int", "flags", "mask", "xcb_window_t"]]:
+            if '[' in vk_type: # handle array, current hard-coded to 4 (TODO: Make this dynamic)
+                return ("[%i, %i, %i, %i]", "%s[0], %s[1], %s[2], %s[3]" % (name, name, name, name), deref)
+            if '*' in vk_type:
+                return ("%i", "(%s == NULL) ? 0 : *(%s)" % (name, name), "*")
+            return ("%i", name, deref)
+        if output_param:
+            return ("%p", "(void*)%s" % name, deref)
+        return ("%p", "(void*)(%s)" % name, deref)
 
     def _generate_init_funcs(self):
         init_tracer = []
@@ -221,9 +262,11 @@ class Subcommand(object):
                                                                  '    vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pCreateInfo->pColorLoadClearValues));\n'
                                                                  '    vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pCreateInfo))'},
                            'VkPipelineLayoutCreateInfo': {'add_txt': 'vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pCreateInfo), sizeof(VkPipelineLayoutCreateInfo), pCreateInfo);\n'
-                                                                     '    vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pCreateInfo->pSetLayouts), pCreateInfo->setLayoutCount * sizeof(VkDescriptorSetLayout), pCreateInfo->pSetLayouts);',
+                                                                     '    vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pCreateInfo->pSetLayouts), pCreateInfo->setLayoutCount * sizeof(VkDescriptorSetLayout), pCreateInfo->pSetLayouts);'
+                                                                     '    vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pCreateInfo->pPushConstantRanges), pCreateInfo->pushConstantRangeCount * sizeof(VkPushConstantRange), pCreateInfo->pPushConstantRanges);',
                                                      'finalize_txt': 'vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pCreateInfo->pSetLayouts));\n'
-                                                                     '    vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pCreateInfo))'},
+                                                                     'vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pCreateInfo->pPushConstantRanges));\n'
+                                                                     'vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pCreateInfo))'},
                            'VkMemoryAllocateInfo': {'add_txt': 'vktrace_add_buffer_to_trace_packet(pHeader, (void**)&(pPacket->pAllocateInfo), sizeof(VkMemoryAllocateInfo), pAllocateInfo);\n'
                                                             '    add_alloc_memory_to_trace_packet(pHeader, (void**)&(pPacket->pAllocateInfo->pNext), pAllocateInfo->pNext)',
                                             'finalize_txt': 'vktrace_finalize_buffer_address(pHeader, (void**)&(pPacket->pAllocateInfo))'},
@@ -363,6 +406,7 @@ class Subcommand(object):
                                          'CreateInstance',
                                          'CreatePipelineCache',
                                          'CreateRenderPass',
+                                         'GetPipelineCacheData',
                                          'CreateGraphicsPipelines',
                                          'CreateComputePipelines',
                                          'CmdPipelineBarrier',
@@ -391,16 +435,18 @@ class Subcommand(object):
                                          'CreateSwapchainKHR',
                                          'GetSwapchainImagesKHR',
                                          'QueuePresentKHR',
-                                         #TODO add Xlib, Wayland, Mir
+                                         #TODO add Wayland, Mir
                                          'CreateXcbSurfaceKHR',
+                                         'CreateXlibSurfaceKHR',
                                          'GetPhysicalDeviceXcbPresentationSupportKHR',
+                                         'GetPhysicalDeviceXlibPresentationSupportKHR',
                                          'CreateWin32SurfaceKHR',
                                          'GetPhysicalDeviceWin32PresentationSupportKHR',
                                          ]
 
         # validate the manually_written_hooked_funcs list
         protoFuncs = [proto.name for proto in self.protos]
-        wsi_platform_manual_funcs = ['CreateWin32SurfaceKHR', 'CreateXcbSurfaceKHR', 'GetPhysicalDeviceXcbPresentationSupportKHR', 'GetPhysicalDeviceWin32PresentationSupportKHR']
+        wsi_platform_manual_funcs = ['CreateWin32SurfaceKHR', 'CreateXcbSurfaceKHR', 'CreateXlibSurfaceKHR', 'GetPhysicalDeviceXcbPresentationSupportKHR','GetPhysicalDeviceXlibPresentationSupportKHR', 'GetPhysicalDeviceWin32PresentationSupportKHR']
         for func in manually_written_hooked_funcs:
             if (func not in protoFuncs) and (func not in wsi_platform_manual_funcs):
                 sys.exit("Entry '%s' in manually_written_hooked_funcs list is not in the vulkan function prototypes" % func)
@@ -412,7 +458,7 @@ class Subcommand(object):
                 for proto in ext.protos:
                     if proto.name in manually_written_hooked_funcs:
                         func_body.append( '// __HOOKED_vk%s is manually written. Look in vktrace_lib_trace.cpp\n' % proto.name)
-                    elif 'CreateAndroidSurfaceKHR' not in proto.name:
+                    elif proto.name not in proto_exclusions:
                         raw_packet_update_list = [] # non-ptr elements placed directly into packet
                         ptr_packet_update_list = [] # ptr elements to be updated into packet
                         return_txt = ''
@@ -493,7 +539,7 @@ class Subcommand(object):
         pid_enum.append('{')
         first_func = True
         for proto in self.protos:
-            if 'CreateAndroidSurfaceKHR' in proto.name:
+            if proto.name in proto_exclusions:
                 continue
             if first_func:
                 first_func = False
@@ -514,7 +560,7 @@ class Subcommand(object):
         func_body.append('        return "vkApiVersion";')
         func_body.append('    }')
         for proto in self.protos:
-            if 'CreateAndroidSurfaceKHR' in proto.name:
+            if proto.name in proto_exclusions:
                 continue
             func_body.append('    case VKTRACE_TPI_VK_vk%s:' % proto.name)
             func_body.append('    {')
@@ -526,6 +572,52 @@ class Subcommand(object):
         func_body.append('}\n')
         return "\n".join(func_body)
 
+    def _generate_stringify_func(self):
+        func_body = []
+        func_body.append('static const char *vktrace_stringify_vk_packet_id(const enum VKTRACE_TRACE_PACKET_ID_VK id, const vktrace_trace_packet_header* pHeader)')
+        func_body.append('{')
+        func_body.append('    static char str[1024];')
+        func_body.append('    switch(id) {')
+        func_body.append('    case VKTRACE_TPI_VK_vkApiVersion:')
+        func_body.append('    {')
+        func_body.append('        packet_vkApiVersion* pPacket = (packet_vkApiVersion*)(pHeader->pBody);')
+        func_body.append('        snprintf(str, 1024, "vkApiVersion = 0x%x", pPacket->version);')
+        func_body.append('        return str;')
+        func_body.append('    }')
+        for proto in self.protos:
+            if proto.name in proto_exclusions:
+                continue
+            func_body.append('    case VKTRACE_TPI_VK_vk%s:' % proto.name)
+            func_body.append('    {')
+            func_str = 'vk%s(' % proto.name
+            print_vals = ''
+            create_func = False
+            if 'Create' in proto.name or 'Alloc' in proto.name or 'MapMemory' in proto.name:
+                create_func = True
+            for p in proto.params:
+                last_param = False
+                if (p.name == proto.params[-1].name):
+                    last_param = True
+                if last_param and create_func: # last param of create func
+                    (pft, pfi, ptr) = self._get_printf_params(p.ty,'pPacket->%s' % p.name, True)
+                else:
+                    (pft, pfi, ptr) = self._get_printf_params(p.ty, 'pPacket->%s' % p.name, False)
+                if last_param == True:
+                    func_str += '%s%s = %s)' % (ptr, p.name, pft)
+                    print_vals += ', %s' % (pfi)
+                else:
+                    func_str += '%s%s = %s, ' % (ptr, p.name, pft)
+                    print_vals += ', %s' % (pfi)
+            func_body.append('        packet_vk%s* pPacket = (packet_vk%s*)(pHeader->pBody);' % (proto.name, proto.name))
+            func_body.append('        snprintf(str, 1024, "%s"%s);' % (func_str, print_vals))
+            func_body.append('        return str;')
+            func_body.append('    }')
+        func_body.append('    default:')
+        func_body.append('        return NULL;')
+        func_body.append('    }')
+        func_body.append('};\n')
+        return "\n".join(func_body)
+    
     def _generate_interp_func(self):
         interp_func_body = []
         interp_func_body.append('%s' % self.lineinfo.get())
@@ -542,7 +634,7 @@ class Subcommand(object):
         interp_func_body.append('            return interpret_body_as_vkApiVersion(pHeader)->header;')
         interp_func_body.append('        }')
         for proto in self.protos:
-            if 'CreateAndroidSurfaceKHR' in proto.name:
+            if proto.name in proto_exclusions:
                 continue
 
             interp_func_body.append('        case VKTRACE_TPI_VK_vk%s:\n        {' % proto.name)
@@ -576,7 +668,7 @@ class Subcommand(object):
         pid_enum.append('static void add_VkInstanceCreateInfo_to_packet(vktrace_trace_packet_header* pHeader, VkInstanceCreateInfo** ppStruct, VkInstanceCreateInfo *pInStruct)')
         pid_enum.append('{')
         pid_enum.append('    vktrace_add_buffer_to_trace_packet(pHeader, (void**)ppStruct, sizeof(VkInstanceCreateInfo), pInStruct);')
-        pid_enum.append('    add_VkApplicationInfo_to_packet(pHeader, (VkApplicationInfo**)&((*ppStruct)->pApplicationInfo), pInStruct->pApplicationInfo);')
+        pid_enum.append('    if (pInStruct->pApplicationInfo) add_VkApplicationInfo_to_packet(pHeader, (VkApplicationInfo**)&((*ppStruct)->pApplicationInfo), pInStruct->pApplicationInfo);')
         # TODO138 : This is an initial pass at getting the extension/layer arrays correct, needs to be validated.
         pid_enum.append('    uint32_t i, siz = 0;')
         pid_enum.append('    vktrace_add_buffer_to_trace_packet(pHeader, (void**)&((*ppStruct)->ppEnabledLayerNames), pInStruct->enabledLayerCount * sizeof(char*), pInStruct->ppEnabledLayerNames);')
@@ -649,8 +741,11 @@ class Subcommand(object):
         pid_enum.append('    {')
         pid_enum.append('        pVkInstanceCreateInfo->pApplicationInfo = (VkApplicationInfo*)vktrace_trace_packet_interpret_buffer_pointer(pHeader, (intptr_t)pVkInstanceCreateInfo->pApplicationInfo);')
         pid_enum.append('        VkApplicationInfo** ppApplicationInfo = (VkApplicationInfo**) &pVkInstanceCreateInfo->pApplicationInfo;')
-        pid_enum.append('        (*ppApplicationInfo)->pApplicationName = (const char*)vktrace_trace_packet_interpret_buffer_pointer(pHeader, (intptr_t)pVkInstanceCreateInfo->pApplicationInfo->pApplicationName);')
-        pid_enum.append('        (*ppApplicationInfo)->pEngineName = (const char*)vktrace_trace_packet_interpret_buffer_pointer(pHeader, (intptr_t)pVkInstanceCreateInfo->pApplicationInfo->pEngineName);')
+        pid_enum.append('        if (pVkInstanceCreateInfo->pApplicationInfo)')
+        pid_enum.append('        {')
+        pid_enum.append('            (*ppApplicationInfo)->pApplicationName = (const char*)vktrace_trace_packet_interpret_buffer_pointer(pHeader, (intptr_t)pVkInstanceCreateInfo->pApplicationInfo->pApplicationName);')
+        pid_enum.append('            (*ppApplicationInfo)->pEngineName = (const char*)vktrace_trace_packet_interpret_buffer_pointer(pHeader, (intptr_t)pVkInstanceCreateInfo->pApplicationInfo->pEngineName);')
+        pid_enum.append('        }')
         pid_enum.append('        if (pVkInstanceCreateInfo->enabledLayerCount > 0)')
         pid_enum.append('        {')
         pid_enum.append('            pVkInstanceCreateInfo->ppEnabledLayerNames = (const char* const*)vktrace_trace_packet_interpret_buffer_pointer(pHeader, (intptr_t)pVkInstanceCreateInfo->ppEnabledLayerNames);')
@@ -814,7 +909,8 @@ class Subcommand(object):
                              'CreatePipelineCache' : {'param': 'pCreateInfo', 'txt': [
                                                        '((VkPipelineCacheCreateInfo *)pPacket->pCreateInfo)->pInitialData = (const void*) vktrace_trace_packet_interpret_buffer_pointer(pHeader, (intptr_t)pPacket->pCreateInfo->pInitialData);\n']},
                              'CreatePipelineLayout' : {'param': 'pCreateInfo', 'txt': ['VkPipelineLayoutCreateInfo* pInfo = (VkPipelineLayoutCreateInfo*)pPacket->pCreateInfo;\n',
-                                                       'pInfo->pSetLayouts = (VkDescriptorSetLayout*) vktrace_trace_packet_interpret_buffer_pointer(pHeader, (intptr_t)pPacket->pCreateInfo->pSetLayouts);\n']},
+                                                       'pInfo->pSetLayouts = (VkDescriptorSetLayout*) vktrace_trace_packet_interpret_buffer_pointer(pHeader, (intptr_t)pPacket->pCreateInfo->pSetLayouts);\n',
+                                                       'pInfo->pPushConstantRanges = (VkPushConstantRange*) vktrace_trace_packet_interpret_buffer_pointer(pHeader, (intptr_t)pPacket->pCreateInfo->pPushConstantRanges);\n']},
                              'CreateDescriptorPool' : {'param': 'pCreateInfo', 'txt': ['VkDescriptorPoolCreateInfo* pInfo = (VkDescriptorPoolCreateInfo*)pPacket->pCreateInfo;\n',
                                                        'pInfo->pPoolSizes = (VkDescriptorPoolSize*) vktrace_trace_packet_interpret_buffer_pointer(pHeader, (intptr_t)pPacket->pCreateInfo->pPoolSizes);\n']},
                              'CmdWaitEvents' : {'param': 'ppMemoryBarriers', 'txt': mem_barrier_interp},
@@ -950,7 +1046,7 @@ class Subcommand(object):
         if_body.append('    return pPacket;')
         if_body.append('}\n')
         for proto in self.protos:
-            if 'Dbg' not in proto.name and 'CreateAndroidSurfaceKHR' not in proto.name:
+            if proto.name not in proto_exclusions:
                 if 'UnmapMemory' == proto.name:
                     proto.params.append(vulkan.Param("void*", "pData"))
                 elif 'FlushMappedMemoryRanges' == proto.name:
@@ -1023,7 +1119,7 @@ class Subcommand(object):
         xf_body.append('    void init_funcs(void * libHandle);')
         xf_body.append('    void *m_libHandle;\n')
         for proto in self.protos:
-            if 'CreateAndroidSurfaceKHR' in proto.name:
+            if proto.name in proto_exclusions:
                 continue
 
             xf_body.append('    typedef %s( VKAPI_PTR * type_vk%s)(' % (proto.ret, proto.name))
@@ -1122,12 +1218,12 @@ class Subcommand(object):
         rof_body.append('        if (entire_map)')
         rof_body.append('        {')
         rof_body.append('            size = mr.size;')
-        rof_body.append('            offset = mr.offset;')
+        rof_body.append('            offset = 0;   // pointer to mapped buffer is from offset 0')
         rof_body.append('        }')
         rof_body.append('        else')
         rof_body.append('        {')
         rof_body.append('            assert(offset >= mr.offset);')
-        rof_body.append('            assert(size <= mr.size && (size + offset) <= mr.size);')
+        rof_body.append('            assert(size <= mr.size && (size + offset) <= (size_t)m_allocInfo.allocationSize);')
         rof_body.append('        }')
         rof_body.append('        memcpy(mr.pData + offset, pSrcData, size);')
         rof_body.append('        if (!mr.pending && entire_map)')
@@ -1360,9 +1456,9 @@ class Subcommand(object):
         rif_body = []
         rif_body.append('void vkFuncs::init_funcs(void * handle)\n{\n    m_libHandle = handle;')
         for proto in self.protos:
-            if 'CreateAndroidSurfaceKHR' in proto.name:
+            if proto.name in proto_exclusions:
                 continue
-            if 'Dbg' not in proto.name and 'DebugReport' not in proto.name:
+            if 'DebugReport' not in proto.name:
                 rif_body.append('    real_vk%s = (type_vk%s)(vktrace_platform_get_library_entrypoint(handle, "vk%s"));' % (proto.name, proto.name, proto.name))
             else: # These func ptrs get assigned at GetProcAddr time
                 rif_body.append('    real_vk%s = (type_vk%s)NULL;' % (proto.name, proto.name))
@@ -1493,6 +1589,29 @@ class Subcommand(object):
         cb_body.append('            }')
         return "\n".join(cb_body)
 
+    # These are customized because they are the only entry points returning VkBool32
+    def _gen_replay_GetPhysicalDeviceXcbPresentationSupportKHR (self):
+        cb_body = []
+        cb_body.append('            VkBool32 rval = manually_replay_vkGetPhysicalDeviceXcbPresentationSupportKHR(pPacket);')
+        cb_body.append('            if (rval != pPacket->result)')
+        cb_body.append('            {')
+        cb_body.append('                vktrace_LogError("Return value %d from API call (vkGetPhysicalDeviceXcbPresentationSupportKHR) does not match return value from trace file %d.",')
+        cb_body.append('                                 rval, pPacket->result);')
+        cb_body.append('                returnValue = vktrace_replay::VKTRACE_REPLAY_BAD_RETURN;')
+        cb_body.append('            }')
+        return "\n".join(cb_body)
+
+    def _gen_replay_GetPhysicalDeviceXlibPresentationSupportKHR (self):
+        cb_body = []
+        cb_body.append('            VkBool32 rval = manually_replay_vkGetPhysicalDeviceXlibPresentationSupportKHR(pPacket);')
+        cb_body.append('            if (rval != pPacket->result)')
+        cb_body.append('            {')
+        cb_body.append('                vktrace_LogError("Return value %d from API call (vkGetPhysicalDeviceXlibPresentationSupportKHR) does not match return value from trace file %d.",')
+        cb_body.append('                                 rval, pPacket->result);')
+        cb_body.append('                returnValue = vktrace_replay::VKTRACE_REPLAY_BAD_RETURN;')
+        cb_body.append('            }')
+        return "\n".join(cb_body)
+
     # Generate main replay case statements where actual replay API call is dispatched based on input packet data
     def _generate_replay(self):
         manually_replay_funcs = ['AllocateMemory',
@@ -1500,7 +1619,9 @@ class Subcommand(object):
                                  'CreateDescriptorSetLayout',
                                  'CreateDevice',
                                  'CreateFramebuffer',
+                                 'GetPipelineCacheData',
                                  'CreateGraphicsPipelines',
+                                 'CreateComputePipelines',
                                  #'CreateInstance',
                                  'CreatePipelineLayout',
                                  'CreateRenderPass',
@@ -1526,6 +1647,7 @@ class Subcommand(object):
                                  'CreateSwapchainKHR',
                                  'GetSwapchainImagesKHR',
                                  'CreateXcbSurfaceKHR',
+                                 'CreateXlibSurfaceKHR',
                                  'CreateWin32SurfaceKHR',
                                  #TODO Wayland, Mir, Xlib
                                  #'GetPhysicalDeviceInfo',
@@ -1542,7 +1664,7 @@ class Subcommand(object):
 
         # validate the manually_replay_funcs list
         protoFuncs = [proto.name for proto in self.protos]
-        wsi_platform_manual_funcs = ['CreateWin32SurfaceKHR', 'CreateXcbSurfaceKHR']
+        wsi_platform_manual_funcs = ['CreateWin32SurfaceKHR', 'CreateXcbSurfaceKHR', 'CreateXlibSurfaceKHR']
 
         for func in manually_replay_funcs:
             if (func not in protoFuncs) and (func not in wsi_platform_manual_funcs):
@@ -1551,7 +1673,9 @@ class Subcommand(object):
         # map protos to custom functions if body is fully custom
         custom_body_dict = {'CreateImage': self._gen_replay_create_image,
                             'CreateBuffer': self._gen_replay_create_buffer,
-                            'CreateInstance': self._gen_replay_create_instance }
+                            'CreateInstance': self._gen_replay_create_instance,
+                            'GetPhysicalDeviceXcbPresentationSupportKHR': self._gen_replay_GetPhysicalDeviceXcbPresentationSupportKHR,
+                            'GetPhysicalDeviceXlibPresentationSupportKHR': self._gen_replay_GetPhysicalDeviceXlibPresentationSupportKHR }
         # multi-gpu Open funcs w/ list of local params to create
         custom_open_params = {'OpenSharedMemory': (-1,),
                               'OpenSharedSemaphore': (-1,),
@@ -1562,7 +1686,7 @@ class Subcommand(object):
         # Functions to treat as "Create' that don't have 'Create' in the name
         special_create_list = ['LoadPipeline', 'LoadPipelineDerivative', 'AllocateMemory', 'GetDeviceQueue', 'PinSystemMemory', 'AllocateDescriptorSets']
         # A couple funcs use do while loops
-        do_while_dict = {'GetFenceStatus': 'replayResult != pPacket->result  && pPacket->result == VK_SUCCESS', 'GetEventStatus': '(pPacket->result == VK_EVENT_SET || pPacket->result == VK_EVENT_RESET) && replayResult != pPacket->result'}
+        do_while_dict = {'GetFenceStatus': 'replayResult != pPacket->result  && pPacket->result == VK_SUCCESS', 'GetEventStatus': '(pPacket->result == VK_EVENT_SET || pPacket->result == VK_EVENT_RESET) && replayResult != pPacket->result', 'GetQueryPoolResults': 'pPacket->result == VK_SUCCESS && replayResult != pPacket->result'}
         rbody = []
         rbody.append('%s' % self.lineinfo.get())
         rbody.append('vktrace_replay::VKTRACE_REPLAY_RESULT vkReplay::replay(vktrace_trace_packet_header *packet)')
@@ -1574,7 +1698,7 @@ class Subcommand(object):
         rbody.append('        case VKTRACE_TPI_VK_vkApiVersion:')
         rbody.append('        {')
         rbody.append('            packet_vkApiVersion* pPacket = (packet_vkApiVersion*)(packet->pBody);')
-        rbody.append('            if (pPacket->version != VK_MAKE_VERSION(1, 0, VK_HEADER_VERSION))')
+        rbody.append('            if (VK_VERSION_MAJOR(pPacket->version) != 1 || VK_VERSION_MINOR (pPacket->version) != 0)')
         rbody.append('            {')
         rbody.append('                vktrace_LogError("Trace file is from Vulkan version 0x%x (%u.%u.%u), but the vktrace plugin only supports version 0x%x (%u.%u.%u).", pPacket->version, (pPacket->version & 0xFFC00000) >> 22, (pPacket->version & 0x003FF000) >> 12, (pPacket->version & 0x00000FFF), VK_MAKE_VERSION(1, 0, VK_HEADER_VERSION), ((VK_MAKE_VERSION(1, 0, VK_HEADER_VERSION)) & 0xFFC00000) >> 22, ((VK_MAKE_VERSION(1, 0, VK_HEADER_VERSION)) & 0x003FF000) >> 12, ((VK_MAKE_VERSION(1, 0, VK_HEADER_VERSION)) & 0x00000FFF));')
         rbody.append('                returnValue = vktrace_replay::VKTRACE_REPLAY_ERROR;')
@@ -1582,7 +1706,7 @@ class Subcommand(object):
         rbody.append('            break;')
         rbody.append('        }')
         for proto in self.protos:
-            if 'CreateAndroidSurfaceKHR' in proto.name:
+            if proto.name in proto_exclusions:
                 continue
 
             ret_value = False
@@ -1662,9 +1786,9 @@ class Subcommand(object):
                 # TODO: need a better way to indicate which extensions should be mapped to which Get*ProcAddr
                 elif proto.name == 'GetInstanceProcAddr':
                     for iProto in self.protos:
-                        if 'CreateAndroidSurfaceKHR' in iProto.name:
+                        if iProto.name in proto_exclusions:
                             continue
-                        if 'Dbg' in iProto.name or 'DebugReport' in iProto.name:
+                        if 'DebugReport' in iProto.name:
                             rbody.append('            if (strcmp(pPacket->pName, "vk%s") == 0) {' % (iProto.name))
                             rbody.append('               m_vkFuncs.real_vk%s = (PFN_vk%s)vk%s(remappedinstance, pPacket->pName);' % (iProto.name, iProto.name, proto.name))
                             rbody.append('            }')
@@ -1674,7 +1798,7 @@ class Subcommand(object):
                             rbody.append('            }')
                 elif proto.name == 'GetDeviceProcAddr':
                     for dProto in self.protos:
-                       if 'CreateAndroidSurfaceKHR' in dProto.name:
+                       if dProto.name in proto_exclusions:
                             continue
                        if 'KHR' in dProto.name and dProto.params[0].ty != 'VkInstance' and dProto.params[0].ty != 'VkPhysicalDevice':
                        # if 'KHR' in dProto.name:
@@ -1855,7 +1979,7 @@ class VktracePacketID(Subcommand):
         header_txt.append('#include "vktrace_trace_packet_identifiers.h"')
         header_txt.append('#include "vktrace_interconnect.h"')
         #header_txt.append('#include "vktrace_vk_vk_lunarg_debug_marker_packets.h"')
-        #header_txt.append('#include "vk_enum_string_helper.h"')
+        header_txt.append('#include "vk_enum_string_helper.h"')
         header_txt.append('#ifndef _WIN32')
         header_txt.append(' #pragma GCC diagnostic ignored "-Wwrite-strings"')
         header_txt.append('#endif')
@@ -1865,6 +1989,11 @@ class VktracePacketID(Subcommand):
         header_txt.append('#endif')
         header_txt.append('#if defined(WIN32)')
         header_txt.append('#define snprintf _snprintf')
+        header_txt.append('#endif')
+        header_txt.append('#if defined(WIN32)')
+        header_txt.append('#define VK_SIZE_T_SPECIFIER "%Iu"')
+        header_txt.append('#else')
+        header_txt.append('#define VK_SIZE_T_SPECIFIER "%zu"')
         header_txt.append('#endif')
         header_txt.append('#define SEND_ENTRYPOINT_ID(entrypoint) ;')
         header_txt.append('//#define SEND_ENTRYPOINT_ID(entrypoint) vktrace_TraceInfo(#entrypoint);\n')
@@ -1881,7 +2010,7 @@ class VktracePacketID(Subcommand):
     def generate_body(self):
         body = [self._generate_packet_id_enum(),
                 self._generate_packet_id_name_func(),
-#                self._generate_stringify_func(),
+                self._generate_stringify_func(),
                 self._generate_interp_func()]
 
         return "\n".join(body)
